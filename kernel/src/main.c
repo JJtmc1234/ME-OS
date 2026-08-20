@@ -4,6 +4,7 @@
  * M2: read the keyboard and show the last key pressed, without disturbing
  *     the M1 message.
  * M3: draw one static rectangle, without disturbing either.
+ * M4: show a mouse cursor that moves, without disturbing any of them.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -12,11 +13,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cursor.h"
 #include "fb.h"
 #include "font.h"
 #include "kbd.h"
 #include "limine.h"
 #include "log.h"
+#include "mouse.h"
+#include "pointer.h"
 
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
@@ -27,6 +31,12 @@
  * numbers, so change them in both places or the check will fail. */
 #define M3_RECT_WIDTH_DIVISOR  4
 #define M3_RECT_HEIGHT_DIVISOR 14
+
+/* M4: where the cursor starts. Clear of the message, the key line and the
+ * rectangle, so it never has to overlap them just by existing.
+ * tests/check_boot.py mirrors these divisors. */
+#define M4_CURSOR_START_X_DIVISOR 4
+#define M4_CURSOR_START_Y_DIVISOR 6
 
 /* Limine scans the executable for these structures, so they must survive
  * optimisation and stay inside the section the linker script keeps. */
@@ -52,6 +62,8 @@ static uint64_t key_line_scale;
 static uint32_t colour_text;
 static uint32_t colour_background;
 static uint32_t colour_rect;
+static uint32_t colour_cursor;
+static struct pointer pointer_state;
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -111,10 +123,23 @@ static uint64_t centred_x(uint64_t chars, uint64_t scale)
 static void draw_key_line(const char *text)
 {
     const uint64_t height = FONT_HEIGHT * key_line_scale;
+    const bool had_cursor = cursor_visible();
+
+    /* The cursor holds a copy of the pixels underneath it. Drawing over them
+     * while it is up would make that copy stale, and hiding it later would
+     * smear the old line back over the new one. */
+    if (had_cursor) {
+        cursor_hide();
+    }
 
     fb_fill_rect(0, key_line_y, fb_width(), height, colour_background);
     fb_draw_string(text, centred_x(str_len(text), key_line_scale),
                    key_line_y, colour_text, key_line_scale);
+
+    if (had_cursor) {
+        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                    colour_cursor, colour_background);
+    }
 }
 
 static void show_key(const struct kbd_key *key)
@@ -177,6 +202,7 @@ void kmain(void)
     colour_background = fb_rgb(0, 0, 0);
     colour_text = fb_rgb(255, 255, 255);
     colour_rect = fb_rgb(60, 170, 220);
+    colour_cursor = fb_rgb(255, 214, 64);
     fb_clear(colour_background);
 
     /* M1: the message, centred, exactly as the milestone specifies. */
@@ -222,11 +248,43 @@ void kmain(void)
     kbd_init();
     log_stage("keyboard ready, waiting for keys");
 
+    /* M4: a cursor the pointer state drives. No dragging, nothing follows it,
+     * and it moves nothing on the screen. */
+    pointer_init(&pointer_state,
+                 (int64_t)(fb_width() / M4_CURSOR_START_X_DIVISOR),
+                 (int64_t)(fb_height() / M4_CURSOR_START_Y_DIVISOR),
+                 fb_width(), fb_height());
+
+    const bool have_mouse = mouse_init();
+    if (have_mouse) {
+        log_stage("mouse ready");
+    } else {
+        log_stage("no mouse answered, the cursor will not move");
+    }
+
+    cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                colour_cursor, colour_background);
+    log_str("me-os: drew the M4 cursor at ");
+    log_dec((uint64_t)pointer_state.x);
+    log_str(",");
+    log_dec((uint64_t)pointer_state.y);
+    log_str("\n");
+
     for (;;) {
         struct kbd_key key;
+        struct mouse_delta movement;
 
         if (kbd_poll(&key)) {
             show_key(&key);
+        }
+
+        if (mouse_poll(&movement)) {
+            if (pointer_move(&pointer_state, movement.dx, movement.dy,
+                             fb_width(), fb_height())) {
+                cursor_hide();
+                cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                            colour_cursor, colour_background);
+            }
         }
         /* Hints to the processor that this is a spin loop. Interrupts are
          * masked, so hlt would never wake up again. */

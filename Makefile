@@ -181,13 +181,23 @@ run-serial: $(ISO) $(OVMF_LOCAL)
 
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.
+HOST_TEST_FLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include
+
 $(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c
 	@mkdir -p $(BUILD)
-	$(CC) -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include \
+	$(CC) $(HOST_TEST_FLAGS) \
 		tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c -o $@
 
-test-unit: $(BUILD)/fb_bounds_test
+# mouse.c compiles on the host because only its pure decoding is called here.
+# Nothing in this test touches a port.
+$(BUILD)/pointer_test: tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) \
+		tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c -o $@
+
+test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test
 	$(BUILD)/fb_bounds_test
+	$(BUILD)/pointer_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

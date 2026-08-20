@@ -34,6 +34,9 @@ references them and `--gc-sections` would otherwise discard them.
 | `fb.c` | linear framebuffer: clear, fill a rectangle, draw a string |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
 | `kbd.c` | polled PS/2 keyboard, scancode set 1 |
+| `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
+| `pointer.c` | where the pointer is, and clamping it to the screen |
+| `cursor.c` | drawing the cursor, and putting back what it covered |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -45,8 +48,22 @@ writes ordinary looking C.
 ## Decisions worth knowing
 
 **No interrupts yet.** There is no interrupt descriptor table, so an IRQ would
-triple fault the machine. Interrupts stay masked and the keyboard is polled.
+triple fault the machine. Interrupts stay masked, and both the keyboard and the
+mouse are polled. The controller's status register says which device a waiting
+byte came from, so the two share one port without stealing each other's bytes.
 An IDT arrives when a milestone actually needs it.
+
+**Input is split three ways.** `mouse.c` talks to the hardware and assembles
+packets, `pointer.c` holds the position and clamps it, `cursor.c` draws it.
+A second input device would touch only the first of those, and a different
+cursor only the last. Decoding and clamping are pure functions, which is why
+both can be tested on an ordinary machine.
+
+**The cursor saves what it covers.** There is no second buffer to draw into, so
+the cursor keeps a copy of the pixels underneath and puts them back before it
+moves. Anything else that draws has to hide the cursor first, or that copy goes
+stale and the cursor smears the old picture back over the new one. That is one
+rule to remember, and it is why `draw_key_line` hides and reshows it.
 
 **Framebuffer assumptions are checked, not assumed.** `fb_init` refuses a null
 address, a bits per pixel other than 32, a zero dimension, a pitch smaller than

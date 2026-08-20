@@ -8,6 +8,8 @@ milestones:
   M2  a second line that says PRESS A KEY before any input, and reports the
       injected key afterwards
   M3  one solid rectangle, in its own colour, at the expected size and place
+  M4  a cursor that starts where it should, moves when the mouse moves, keeps
+      its shape, and stops at the edge of the screen instead of leaving it
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -23,6 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCREEN_BOOT = ROOT / "build" / "screen-boot.ppm"
 SCREEN_KEY = ROOT / "build" / "screen-key.ppm"
+SCREEN_MOUSE = ROOT / "build" / "screen-mouse.ppm"
+SCREEN_CLAMP = ROOT / "build" / "screen-clamp.ppm"
 DEBUG_LOG = ROOT / "build" / "debug.log"
 SERIAL_LOG = ROOT / "build" / "serial.log"
 
@@ -36,6 +40,13 @@ M2_AFTER_KEY = f"LAST KEY {KEY_SENT}"
 RECT_COLOUR = (60, 170, 220)
 RECT_WIDTH_DIVISOR = 4
 RECT_HEIGHT_DIVISOR = 14
+
+CURSOR_COLOUR = (255, 214, 64)
+CURSOR_START_X_DIVISOR = 4
+CURSOR_START_Y_DIVISOR = 6
+# Must match scripts/boot-capture.sh.
+MOUSE_DX = 120
+MOUSE_DY = -60
 
 FONT_WIDTH = 8
 FONT_HEIGHT = 8
@@ -114,11 +125,12 @@ def read_ppm(path: Path) -> tuple[int, int, bytes]:
     return width, height, pixels
 
 
-def read_screen(path: Path) -> tuple[int, int, dict[int, set[int]], set[tuple[int, int]]]:
-    """Sort every non black pixel into text (white) or rectangle (its colour)."""
+def read_screen(path: Path):
+    """Sort every non black pixel by what drew it: text, rectangle, or cursor."""
     width, height, pixels = read_ppm(path)
     rows: dict[int, set[int]] = {}
     rect: set[tuple[int, int]] = set()
+    cursor: set[tuple[int, int]] = set()
 
     for index in range(0, len(pixels), 3):
         colour = (pixels[index], pixels[index + 1], pixels[index + 2])
@@ -130,20 +142,23 @@ def read_screen(path: Path) -> tuple[int, int, dict[int, set[int]], set[tuple[in
             rows.setdefault(y, set()).add(x)
         elif colour == RECT_COLOUR:
             rect.add((x, y))
+        elif colour == CURSOR_COLOUR:
+            cursor.add((x, y))
         else:
             raise CheckFailed(
                 f"{path.name}: pixel at ({x}, {y}) is rgb{colour}; expected black, "
-                f"white text, or the M3 rectangle colour rgb{RECT_COLOUR}"
+                f"white text, the M3 rectangle rgb{RECT_COLOUR}, or the M4 cursor "
+                f"rgb{CURSOR_COLOUR}"
             )
 
     if not rows:
         raise CheckFailed(f"{path.name}: no white text on the screen")
-    return width, height, rows, rect
+    return width, height, rows, rect, cursor
 
 
-def find_bands(path: Path) -> tuple[int, int, list[Band], set[tuple[int, int]]]:
+def find_bands(path: Path):
     """Split the white pixels into horizontal bands of text."""
-    width, height, rows, rect = read_screen(path)
+    width, height, rows, rect, cursor = read_screen(path)
 
     bands: list[Band] = []
     current_rows: set[int] = set()
@@ -157,7 +172,7 @@ def find_bands(path: Path) -> tuple[int, int, list[Band], set[tuple[int, int]]]:
         current_cols |= rows[row]
         previous = row
     bands.append(Band(current_rows, current_cols))
-    return width, height, bands, rect
+    return width, height, bands, rect, cursor
 
 
 def check_line(band: Band, text: str, label: str, name: str) -> str:
@@ -208,8 +223,17 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
     return f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and centred"
 
 
-def check_screen(path: Path, key_line_text: str) -> list[str]:
-    width, height, bands, rect = find_bands(path)
+def cursor_corner(cursor: set[tuple[int, int]], name: str) -> tuple[int, int, int]:
+    """Top left of the cursor, and how many pixels it is made of."""
+    if not cursor:
+        raise CheckFailed(f"{name}: the M4 cursor is missing")
+    xs = {x for x, _ in cursor}
+    ys = {y for _, y in cursor}
+    return min(xs), min(ys), len(cursor)
+
+
+def check_screen(path: Path, key_line_text: str):
+    width, height, bands, rect, cursor = find_bands(path)
     notes = [f"{path.name}: {width}x{height}, {len(bands)} text lines"]
 
     if len(bands) != 2:
@@ -231,7 +255,12 @@ def check_screen(path: Path, key_line_text: str) -> list[str]:
         raise CheckFailed(f"{path.name}: the key line is not below the M1 message")
     notes.append("  M1 message centred, key line below it")
     notes.append("  " + check_rectangle(rect, width, height, key_line, path.name))
-    return notes
+
+    left, top, pixels = cursor_corner(cursor, path.name)
+    if left >= width or top >= height:
+        raise CheckFailed(f"{path.name}: the cursor is outside the screen")
+    notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
+    return notes, (left, top, pixels), (width, height)
 
 
 def check_log() -> list[str]:
@@ -241,6 +270,8 @@ def check_log() -> list[str]:
         "drew the M1 message",
         "drew the M3 rectangle",
         "keyboard ready",
+        "mouse ready",
+        "drew the M4 cursor",
         f"key {KEY_SENT}",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
@@ -254,14 +285,60 @@ def check_log() -> list[str]:
             if phrase not in text:
                 raise CheckFailed(f"{name} log never reported {phrase!r}")
         notes.append(
-            f"{name} log: boot, message, rectangle, keyboard ready, key {KEY_SENT} received")
+            f"{name} log: boot, message, rectangle, cursor, mouse and keyboard ready, "
+            f"key {KEY_SENT} received")
     return notes
+
+
+def check_cursor_movement(start, moved, clamped, size) -> list[str]:
+    """The cursor tracks the mouse, keeps its shape, and stops at the edge."""
+    width, height = size
+    expected_x = width // CURSOR_START_X_DIVISOR
+    expected_y = height // CURSOR_START_Y_DIVISOR
+
+    if (start[0], start[1]) != (expected_x, expected_y):
+        raise CheckFailed(
+            f"the cursor started at {start[:2]}, expected ({expected_x}, {expected_y})"
+        )
+    if moved[2] != start[2] or clamped[2] != start[2]:
+        raise CheckFailed(
+            f"the cursor changed shape: {start[2]}, {moved[2]}, then {clamped[2]} pixels"
+        )
+
+    actual = (moved[0] - start[0], moved[1] - start[1])
+    if actual != (MOUSE_DX, MOUSE_DY):
+        raise CheckFailed(
+            f"the mouse moved ({MOUSE_DX}, {MOUSE_DY}) but the cursor moved {actual}"
+        )
+
+    # The emulator caps how far one packet can move the pointer, so a hard
+    # shove travels a long way without necessarily reaching the edge. What this
+    # proves is that repeated movement keeps working and stays on screen.
+    # Clamping itself is checked exactly in tests/pointer_test.c.
+    if clamped[0] >= width or clamped[1] >= height:
+        raise CheckFailed("the cursor left the screen")
+    if clamped[0] <= moved[0] or clamped[1] <= moved[1]:
+        raise CheckFailed("shoving the mouse toward the corner did not move the cursor")
+
+    return [
+        f"  cursor started at ({start[0]}, {start[1]}) and followed the mouse exactly",
+        f"  shoved toward the corner it reached ({clamped[0]}, {clamped[1]}), still "
+        f"whole and still inside the {width}x{height} screen",
+    ]
 
 
 def main() -> int:
     try:
-        notes = check_screen(SCREEN_BOOT, M2_PROMPT)
-        notes += check_screen(SCREEN_KEY, M2_AFTER_KEY)
+        notes, boot_cursor, size = check_screen(SCREEN_BOOT, M2_PROMPT)
+        key_notes, key_cursor, _ = check_screen(SCREEN_KEY, M2_AFTER_KEY)
+        mouse_notes, moved_cursor, _ = check_screen(SCREEN_MOUSE, M2_AFTER_KEY)
+        clamp_notes, clamped_cursor, _ = check_screen(SCREEN_CLAMP, M2_AFTER_KEY)
+        notes += key_notes + mouse_notes + clamp_notes
+
+        if key_cursor[:2] != boot_cursor[:2]:
+            raise CheckFailed("the cursor moved on its own before the mouse was touched")
+
+        notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -269,7 +346,8 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1, M2 and M3 checks passed: message drawn, key press seen, rectangle drawn")
+    print("M1 to M4 checks passed: message, key press, rectangle, and a cursor that "
+          "follows the mouse")
     print("A person should still watch it boot once with make run.")
     return 0
 

@@ -54,12 +54,25 @@ uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b)
          | pack(b, b_size, b_shift);
 }
 
-static void put_pixel(uint64_t x, uint64_t y, uint32_t colour)
+void fb_put_pixel(uint64_t x, uint64_t y, uint32_t colour)
 {
     if (x >= fb_w || y >= fb_h) {
         return;
     }
     *(volatile uint32_t *)(fb_base + y * fb_pitch + x * 4) = colour;
+}
+
+uint32_t fb_pixel(uint64_t x, uint64_t y)
+{
+    if (x >= fb_w || y >= fb_h) {
+        return 0;
+    }
+    return *(volatile uint32_t *)(fb_base + y * fb_pitch + x * 4);
+}
+
+static void put_pixel(uint64_t x, uint64_t y, uint32_t colour)
+{
+    fb_put_pixel(x, y, colour);
 }
 
 void fb_clear(uint32_t colour)

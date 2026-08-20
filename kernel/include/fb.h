@@ -25,6 +25,11 @@ uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 void fb_clear(uint32_t colour);
 
+/* Single pixel access, both clipped. fb_pixel returns 0 outside the screen,
+ * which is what the cursor's save and restore relies on. */
+uint32_t fb_pixel(uint64_t x, uint64_t y);
+void fb_put_pixel(uint64_t x, uint64_t y, uint32_t colour);
+
 /* Fills an axis aligned rectangle, clipped to the framebuffer. */
 void fb_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t colour);
 

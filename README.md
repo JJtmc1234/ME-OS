@@ -20,12 +20,13 @@ to a disk or a USB device.
 | M1 boot proof | UEFI boot through Limine, a framebuffer, and one line of text | Verified software milestone, QEMU |
 | M2 keyboard input | A key press reaches the kernel and changes the screen | Verified software milestone, QEMU |
 | M3 draw rectangle | A filled rectangle, with M1 and M2 untouched | Verified software milestone, QEMU |
-| M4 mouse cursor | A cursor that moves with a pointing device | Next |
+| M4 mouse cursor | A cursor that follows a mouse and stays on screen | Verified software milestone, QEMU |
+| M5 move rectangle | The rectangle moves over time | Next |
 
-All three milestones are checked automatically. `make test` boots the image
-headlessly, injects a key press, and inspects the resulting framebuffer.
-`make test-unit` checks the framebuffer's clipping on the development machine,
-without an emulator. See
+All four milestones are checked automatically. `make test` boots the image
+headlessly, injects a key press, moves the mouse, and inspects the resulting
+framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
+decoding and pointer clamping on the development machine, without an emulator. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Success conditions
@@ -43,8 +44,11 @@ IF YOU SEE THIS IT WORKED
 backspace and tab.
 
 **M3.** One filled rectangle, in its own colour, below the key line, with both
-lines of text unchanged. It is static: nothing moves it, and nothing yet reads a
-pointing device.
+lines of text unchanged. It is static: nothing moves it.
+
+**M4.** A cursor is drawn, and moving the mouse moves it. It stays inside the
+screen, keeps its shape, and puts back whatever it covered when it moves on.
+Nothing follows it, nothing can be dragged, and the rectangle does not move.
 
 ## Build and run
 
@@ -91,7 +95,8 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 ## Layout
 
 ```
-kernel/include/   headers: framebuffer, font, keyboard, logging, memory
+kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
+                  logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)
 scripts/          headless boot capture for testing
