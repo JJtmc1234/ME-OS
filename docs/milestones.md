@@ -19,8 +19,8 @@ Nothing here has been booted on a physical machine yet.
 | --- | --- | --- | --- |
 | M1 | Boot proof | Boots over UEFI in QEMU and displays `IF YOU SEE THIS IT WORKED` in white on black, no crash or reboot afterwards | Verified software milestone |
 | M2 | Keyboard input | The M1 message is preserved and a second line reports the most recently pressed supported key | Verified software milestone |
-| M3 | Draw rectangle | A filled rectangle appears at chosen coordinates in a chosen colour | Planned |
-| M4 | Mouse cursor | A cursor is drawn and moves with a pointing device | Planned |
+| M3 | Draw rectangle | A filled rectangle appears at chosen coordinates in a chosen colour, without disturbing M1 or M2 | Verified software milestone |
+| M4 | Mouse cursor | A cursor is drawn and moves with a pointing device | Next |
 | M5 | Move rectangle | The rectangle moves across the screen over time | Planned |
 | M6 | Basic arithmetic | Correctly evaluates simple integer addition and subtraction and shows the result | Planned |
 | M7 | Conditionals | Runs simple if/else logic and visibly demonstrates different outcomes | Planned |
@@ -44,6 +44,14 @@ management, interrupts, processes or filesystems.
 
 ## Verification status
 
-M1 and M2 are verified in QEMU by automated framebuffer inspection. Neither has
+M1, M2 and M3 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
+
+Two kinds of test run:
+
+- `make test-unit` checks the framebuffer's clipping on the development machine,
+  with guard regions around a fake framebuffer, so an out of bounds write is
+  caught without booting anything.
+- `make test` boots the real image headlessly, injects a key press, and inspects
+  the captured framebuffer: the message, the key line, and the rectangle.

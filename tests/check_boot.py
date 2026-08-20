@@ -7,6 +7,7 @@ milestones:
   M1  black background, white text, the boot message on one centred line
   M2  a second line that says PRESS A KEY before any input, and reports the
       injected key afterwards
+  M3  one solid rectangle, in its own colour, at the expected size and place
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -30,6 +31,11 @@ M1_MESSAGE = "IF YOU SEE THIS IT WORKED"
 M2_PROMPT = "PRESS A KEY"
 KEY_SENT = "A"
 M2_AFTER_KEY = f"LAST KEY {KEY_SENT}"
+
+# These mirror kernel/src/main.c too.
+RECT_COLOUR = (60, 170, 220)
+RECT_WIDTH_DIVISOR = 4
+RECT_HEIGHT_DIVISOR = 14
 
 FONT_WIDTH = 8
 FONT_HEIGHT = 8
@@ -108,26 +114,36 @@ def read_ppm(path: Path) -> tuple[int, int, bytes]:
     return width, height, pixels
 
 
-def find_bands(path: Path) -> tuple[int, int, list[Band]]:
-    """Split the lit pixels into horizontal bands of text."""
+def read_screen(path: Path) -> tuple[int, int, dict[int, set[int]], set[tuple[int, int]]]:
+    """Sort every non black pixel into text (white) or rectangle (its colour)."""
     width, height, pixels = read_ppm(path)
     rows: dict[int, set[int]] = {}
+    rect: set[tuple[int, int]] = set()
 
     for index in range(0, len(pixels), 3):
-        r, g, b = pixels[index], pixels[index + 1], pixels[index + 2]
-        if r == 0 and g == 0 and b == 0:
+        colour = (pixels[index], pixels[index + 1], pixels[index + 2])
+        if colour == (0, 0, 0):
             continue
-        if not (r == g == b == 255):
-            pixel = index // 3
-            raise CheckFailed(
-                f"{path.name}: pixel at ({pixel % width}, {pixel // width}) is "
-                f"rgb({r},{g},{b}); only black and white are expected"
-            )
         pixel = index // 3
-        rows.setdefault(pixel // width, set()).add(pixel % width)
+        x, y = pixel % width, pixel // width
+        if colour == (255, 255, 255):
+            rows.setdefault(y, set()).add(x)
+        elif colour == RECT_COLOUR:
+            rect.add((x, y))
+        else:
+            raise CheckFailed(
+                f"{path.name}: pixel at ({x}, {y}) is rgb{colour}; expected black, "
+                f"white text, or the M3 rectangle colour rgb{RECT_COLOUR}"
+            )
 
     if not rows:
-        raise CheckFailed(f"{path.name}: the screen is entirely black")
+        raise CheckFailed(f"{path.name}: no white text on the screen")
+    return width, height, rows, rect
+
+
+def find_bands(path: Path) -> tuple[int, int, list[Band], set[tuple[int, int]]]:
+    """Split the white pixels into horizontal bands of text."""
+    width, height, rows, rect = read_screen(path)
 
     bands: list[Band] = []
     current_rows: set[int] = set()
@@ -141,7 +157,7 @@ def find_bands(path: Path) -> tuple[int, int, list[Band]]:
         current_cols |= rows[row]
         previous = row
     bands.append(Band(current_rows, current_cols))
-    return width, height, bands
+    return width, height, bands, rect
 
 
 def check_line(band: Band, text: str, label: str, name: str) -> str:
@@ -159,8 +175,41 @@ def check_line(band: Band, text: str, label: str, name: str) -> str:
     return f"{label}: {band.glyphs} glyphs, scale {band.height // INK_HEIGHT}"
 
 
+def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
+                    key_line: Band, name: str) -> str:
+    """The M3 rectangle: solid, the expected size, centred, clear of the text."""
+    if not rect:
+        raise CheckFailed(f"{name}: the M3 rectangle is missing")
+
+    xs = {x for x, _ in rect}
+    ys = {y for _, y in rect}
+    left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+    actual_w, actual_h = right - left + 1, bottom - top + 1
+
+    if len(rect) != actual_w * actual_h:
+        raise CheckFailed(
+            f"{name}: the rectangle has holes, {len(rect)} pixels inside a "
+            f"{actual_w}x{actual_h} box"
+        )
+
+    expected_w = width // RECT_WIDTH_DIVISOR
+    expected_h = height // RECT_HEIGHT_DIVISOR
+    if (actual_w, actual_h) != (expected_w, expected_h):
+        raise CheckFailed(
+            f"{name}: the rectangle is {actual_w}x{actual_h}, expected "
+            f"{expected_w}x{expected_h}"
+        )
+    if abs((left + right) / 2 - width / 2) > 1:
+        raise CheckFailed(f"{name}: the rectangle is not horizontally centred")
+    if top <= key_line.bottom:
+        raise CheckFailed(f"{name}: the rectangle overlaps or sits above the key line")
+    if right >= width or bottom >= height:
+        raise CheckFailed(f"{name}: the rectangle runs off the screen")
+    return f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and centred"
+
+
 def check_screen(path: Path, key_line_text: str) -> list[str]:
-    width, height, bands = find_bands(path)
+    width, height, bands, rect = find_bands(path)
     notes = [f"{path.name}: {width}x{height}, {len(bands)} text lines"]
 
     if len(bands) != 2:
@@ -181,6 +230,7 @@ def check_screen(path: Path, key_line_text: str) -> list[str]:
     if key_line.top <= message.bottom:
         raise CheckFailed(f"{path.name}: the key line is not below the M1 message")
     notes.append("  M1 message centred, key line below it")
+    notes.append("  " + check_rectangle(rect, width, height, key_line, path.name))
     return notes
 
 
@@ -189,6 +239,7 @@ def check_log() -> list[str]:
     expected = (
         "kernel entered",
         "drew the M1 message",
+        "drew the M3 rectangle",
         "keyboard ready",
         f"key {KEY_SENT}",
     )
@@ -202,7 +253,8 @@ def check_log() -> list[str]:
         for phrase in expected:
             if phrase not in text:
                 raise CheckFailed(f"{name} log never reported {phrase!r}")
-        notes.append(f"{name} log: boot, draw, keyboard ready, key {KEY_SENT} received")
+        notes.append(
+            f"{name} log: boot, message, rectangle, keyboard ready, key {KEY_SENT} received")
     return notes
 
 
@@ -217,7 +269,7 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 and M2 checks passed: message drawn, key press seen and displayed")
+    print("M1, M2 and M3 checks passed: message drawn, key press seen, rectangle drawn")
     print("A person should still watch it boot once with make run.")
     return 0
 

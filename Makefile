@@ -5,6 +5,7 @@
 #   make            build build/me-os.iso
 #   make run        boot it in QEMU with a window
 #   make test       boot it headless and check what was drawn
+#   make test-unit  run the host side framebuffer checks, no emulator needed
 #   make check      tools, then build, then test
 #   make clean      remove build output
 #
@@ -82,14 +83,15 @@ LDFLAGS := -nostdlib -static -z max-page-size=0x1000 --gc-sections \
 SRCS := $(sort $(wildcard kernel/src/*.c))
 OBJS := $(patsubst kernel/src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 
-.PHONY: all check check-tools run run-serial test clean distclean help
+.PHONY: all check check-tools run run-serial test test-unit clean distclean help
 
 all: $(ISO)
 
 help:
 	@echo "make            build $(ISO)"
 	@echo "make run        boot the ISO in QEMU with a window"
-	@echo "make test       boot headless and verify the M1 screen automatically"
+	@echo "make test       boot headless and verify the screen automatically"
+	@echo "make test-unit  host side framebuffer bounds checks, no emulator"
 	@echo "make check      check tools, build, then test"
 	@echo "make check-tools verify the toolchain is installed"
 	@echo "make clean      remove $(BUILD)/"
@@ -177,13 +179,23 @@ run: $(ISO) $(OVMF_LOCAL)
 run-serial: $(ISO) $(OVMF_LOCAL)
 	$(QEMU) $(QEMU_COMMON) -serial stdio
 
+# Framebuffer clipping checked on the host, with guard regions around a fake
+# framebuffer. Catches an out of bounds write without booting anything.
+$(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c
+	@mkdir -p $(BUILD)
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include \
+		tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c -o $@
+
+test-unit: $(BUILD)/fb_bounds_test
+	$(BUILD)/fb_bounds_test
+
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
 	OVMF_CODE="$(OVMF_CODE)" OVMF_VARS_LOCAL="$(OVMF_LOCAL)" QEMU="$(QEMU)" \
 		scripts/boot-capture.sh
 	python3 tests/check_boot.py
 
-check: check-tools all test
+check: check-tools all test-unit test
 
 clean:
 	$(RM) -r $(BUILD)

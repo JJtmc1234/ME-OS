@@ -19,10 +19,13 @@ to a disk or a USB device.
 | --- | --- | --- |
 | M1 boot proof | UEFI boot through Limine, a framebuffer, and one line of text | Verified software milestone, QEMU |
 | M2 keyboard input | A key press reaches the kernel and changes the screen | Verified software milestone, QEMU |
-| M3 draw rectangle | Filled shapes at chosen coordinates | Planned |
+| M3 draw rectangle | A filled rectangle, with M1 and M2 untouched | Verified software milestone, QEMU |
+| M4 mouse cursor | A cursor that moves with a pointing device | Next |
 
-Both milestones are checked automatically by `make test`, which boots the image
-headlessly, injects a key press, and inspects the resulting framebuffer. See
+All three milestones are checked automatically. `make test` boots the image
+headlessly, injects a key press, and inspects the resulting framebuffer.
+`make test-unit` checks the framebuffer's clipping on the development machine,
+without an emulator. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Success conditions
@@ -39,13 +42,18 @@ IF YOU SEE THIS IT WORKED
 `LAST KEY <key>`. Supported keys are A to Z, 0 to 9, space, enter, escape,
 backspace and tab.
 
+**M3.** One filled rectangle, in its own colour, below the key line, with both
+lines of text unchanged. It is static: nothing moves it, and nothing yet reads a
+pointing device.
+
 ## Build and run
 
 ```
 make            # build build/me-os.iso
 make run        # boot it in QEMU with a window, kernel log on the terminal
 make test       # boot headless, inject a key, check what was drawn
-make check      # check tools, build, then test
+make test-unit  # framebuffer bounds checks on this machine, no emulator
+make check      # check tools, build, then both test suites
 make clean      # remove build output
 make help       # list every target
 ```
@@ -87,7 +95,7 @@ kernel/include/   headers: framebuffer, font, keyboard, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)
 scripts/          headless boot capture for testing
-tests/            automated checks of what the kernel actually drew
+tests/            automated checks: what the kernel drew, and framebuffer bounds
 docs/             architecture, milestones, emergency alert design notes
 linker.ld         higher half kernel layout
 limine.conf       bootloader entry

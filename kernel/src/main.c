@@ -3,6 +3,7 @@
  * M1: boot over UEFI and draw a fixed message.
  * M2: read the keyboard and show the last key pressed, without disturbing
  *     the M1 message.
+ * M3: draw one static rectangle, without disturbing either.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -20,6 +21,12 @@
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
 #define M2_PREFIX   "LAST KEY "
+
+/* M3: one static rectangle. Its size is a fraction of the screen so it stays
+ * clearly visible at any resolution. tests/check_boot.py mirrors these two
+ * numbers, so change them in both places or the check will fail. */
+#define M3_RECT_WIDTH_DIVISOR  4
+#define M3_RECT_HEIGHT_DIVISOR 14
 
 /* Limine scans the executable for these structures, so they must survive
  * optimisation and stay inside the section the linker script keeps. */
@@ -44,6 +51,7 @@ static uint64_t key_line_y;
 static uint64_t key_line_scale;
 static uint32_t colour_text;
 static uint32_t colour_background;
+static uint32_t colour_rect;
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -168,6 +176,7 @@ void kmain(void)
 
     colour_background = fb_rgb(0, 0, 0);
     colour_text = fb_rgb(255, 255, 255);
+    colour_rect = fb_rgb(60, 170, 220);
     fb_clear(colour_background);
 
     /* M1: the message, centred, exactly as the milestone specifies. */
@@ -187,6 +196,28 @@ void kmain(void)
         key_line_y = y + text_h + FONT_HEIGHT;
     }
     draw_key_line(M2_PROMPT);
+
+    /* M3: a filled rectangle below the key line, or above the message if the
+     * screen is too short for it to fit underneath. */
+    const uint64_t rect_w = fb_width() / M3_RECT_WIDTH_DIVISOR;
+    const uint64_t rect_h = fb_height() / M3_RECT_HEIGHT_DIVISOR;
+    const uint64_t rect_x = rect_w < fb_width() ? (fb_width() - rect_w) / 2 : 0;
+    uint64_t rect_y = key_line_y + FONT_HEIGHT * key_line_scale * 2;
+
+    if (rect_y + rect_h >= fb_height()) {
+        rect_y = y > rect_h * 2 ? y - rect_h * 2 : 0;
+    }
+
+    fb_fill_rect(rect_x, rect_y, rect_w, rect_h, colour_rect);
+    log_str("me-os: drew the M3 rectangle ");
+    log_dec(rect_w);
+    log_str("x");
+    log_dec(rect_h);
+    log_str(" at ");
+    log_dec(rect_x);
+    log_str(",");
+    log_dec(rect_y);
+    log_str("\n");
 
     kbd_init();
     log_stage("keyboard ready, waiting for keys");
