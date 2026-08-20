@@ -1,151 +1,109 @@
 # ME OS
 
-ME OS is a from-scratch x86-64 operating system project.
+ME OS is a from scratch x86-64 operating system. It starts extremely small and
+advances through many individually testable milestones.
 
-The long-term goal is to build a general-purpose operating system with:
+The long term goal is a general purpose operating system with strong Linux and
+Unix compatibility where practical, standard file formats and application
+conventions, reliability and recovery as core features, agent native computing,
+an agent centric desktop, and eventual integration with Carl and the wider ME
+ecosystem.
 
-* strong Linux/Unix compatibility where practical
-* standard file formats and application conventions
-* reliability and recovery as core features
-* agent-native computing
-* an agent-centric desktop
-* eventual integration with Carl and the wider ME ecosystem
+Status today: a software prototype that boots in QEMU. It has not been booted on
+a physical machine. That is a later step, and nothing in this repository writes
+to a disk or a USB device.
 
-This project starts extremely small and advances through many individually testable milestones.
+## Current state
 
-## Current milestone
+| Milestone | What it proves | Status |
+| --- | --- | --- |
+| M1 boot proof | UEFI boot through Limine, a framebuffer, and one line of text | Verified software milestone, QEMU |
+| M2 keyboard input | A key press reaches the kernel and changes the screen | Verified software milestone, QEMU |
+| M3 draw rectangle | Filled shapes at chosen coordinates | Planned |
 
-### M1: Boot proof
+Both milestones are checked automatically by `make test`, which boots the image
+headlessly, injects a key press, and inspects the resulting framebuffer. See
+[docs/milestones.md](docs/milestones.md) for the full roadmap.
 
-The system must boot successfully in a virtual machine and display:
+## Success conditions
+
+**M1.** The system boots over UEFI in a virtual machine and displays, in white
+on black, with no crash or reboot afterwards:
 
 ```text
 IF YOU SEE THIS IT WORKED
 ```
 
-Requirements:
+**M2.** The M1 message stays exactly where it was, a second line below it reads
+`PRESS A KEY`, and pressing a supported key replaces that line with
+`LAST KEY <key>`. Supported keys are A to Z, 0 to 9, space, enter, escape,
+backspace and tab.
 
-* x86-64
-* UEFI boot
-* black background
-* white text
-* no crash or reboot after displaying the message
-* no additional functionality required
+## Build and run
 
-M1 is complete when this works reliably in QEMU.
-
-## Planned early milestones
-
-* M1: Boot and display the success message
-* M2: Keyboard input
-* M3: Draw a rectangle
-* M4: Mouse cursor
-* M5: Move the rectangle
-* M6: Basic addition and subtraction
-* M7: Basic conditional logic
-* M8: Variables
-* M9+: Continue in small, testable steps
-
-The project is expected to pass well over 100 milestones before approaching the capabilities of a modern desktop Linux distribution.
-
-## Development philosophy
-
-Each milestone should:
-
-1. Add one small capability.
-2. Have a clear success condition.
-3. Be testable independently.
-4. Avoid unnecessary features.
-5. Preserve working behavior from previous milestones.
-
-Do not skip ahead merely because a later feature is interesting.
-
-## Architecture direction
-
-Initial target:
-
-* Architecture: x86-64
-* Firmware: UEFI
-* Bootloader: Limine
-* Kernel: custom, freestanding
-* Initial implementation language: C
-* Initial test environment: QEMU
-
-The architecture may evolve as the project grows.
-
-## Compatibility direction
-
-ME OS should reuse existing Linux and Unix standards where practical instead of inventing proprietary formats unnecessarily.
-
-Long-term compatibility goals may include:
-
-* ELF executables
-* conventional filesystem paths
-* common Linux file formats
-* standard MIME types
-* common image, audio, video, and document formats
-* Linux-style application metadata
-* POSIX-like interfaces where useful
-* compatibility paths for existing Linux applications
-
-ME-specific formats should only exist where they provide a real advantage.
-
-## Testing strategy
-
-Development order:
-
-1. Build the milestone.
-2. Test it in QEMU.
-3. Fix all known milestone-blocking errors.
-4. Re-test repeatedly.
-5. Later produce a bootable USB.
-6. Test on spare physical hardware without installing to or modifying the internal disk.
-
-Real hardware testing should initially use USB boot only.
-
-## Scope rule
-
-For M1, do not implement:
-
-* keyboard input
-* mouse input
-* filesystems
-* networking
-* multitasking
-* user accounts
-* shells
-* applications
-* agents
-* Carl integration
-* package management
-* audio
-* USB support beyond anything inherently handled before the kernel runs
-
-If the screen displays `IF YOU SEE THIS IT WORKED`, M1 has done its job.
-
-## Repository
-
-Expected early structure:
-
-```text
-ME-OS/
-├── kernel/
-│   ├── src/
-│   └── include/
-├── boot/
-├── scripts/
-├── docs/
-├── tests/
-├── limine.conf
-├── linker.ld
-├── Makefile
-└── README.md
+```
+make            # build build/me-os.iso
+make run        # boot it in QEMU with a window, kernel log on the terminal
+make test       # boot headless, inject a key, check what was drawn
+make check      # check tools, build, then test
+make clean      # remove build output
+make help       # list every target
 ```
 
-This structure is intentionally provisional. Keep it simple until the project actually needs more organization.
+`make run` is the one to use to see it yourself. Press keys in the QEMU window
+and the bottom line changes. Close the window to stop.
 
-## Rule zero
+## Dependencies
 
-Make it boot first.
+On Debian or Ubuntu:
 
-Everything else is somebody else's milestone.
+```
+sudo apt install build-essential xorriso qemu-system-x86 ovmf git python3
+```
+
+`make check-tools` verifies each one and prints where it found the UEFI
+firmware. If OVMF lives somewhere unusual, pass its location:
+
+```
+make run OVMF_CODE=/path/OVMF_CODE.fd OVMF_VARS=/path/OVMF_VARS.fd
+```
+
+Limine is fetched automatically at a pinned tag on the first build.
+
+## Hardware safety rule
+
+This project never writes to a physical disk, a USB device, or any host device.
+Everything it produces is a file under `build/`.
+
+Putting `build/me-os.iso` onto real hardware is a deliberate act a person
+performs themselves, with a command they have read and understood, on a device
+they have chosen. No script in this repository does it, and none should be added
+that does. Writing an image to the wrong device destroys whatever was on it.
+
+## Layout
+
+```
+kernel/include/   headers: framebuffer, font, keyboard, logging, memory
+kernel/src/       the kernel itself, one small module per concern
+boot/             Limine license, and the fetched bootloader (not committed)
+scripts/          headless boot capture for testing
+tests/            automated checks of what the kernel actually drew
+docs/             architecture, milestones, emergency alert design notes
+linker.ld         higher half kernel layout
+limine.conf       bootloader entry
+Makefile          the whole build
+```
+
+## Reproducible builds
+
+Two clean builds of the same source produce byte identical output, both the
+kernel and the ISO. Timestamps, file dates, the GPT identifier and the build
+path are all pinned. `SOURCE_DATE_EPOCH`, `ISO_DATE` and `ISO_GUID` can be
+overridden if a different fixed value is wanted.
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) how the kernel is put together
+- [docs/milestones.md](docs/milestones.md) the milestone roadmap
+- [docs/emergency-alerts.md](docs/emergency-alerts.md) design notes for a future
+  ME emergency alert system, deliberately not implemented

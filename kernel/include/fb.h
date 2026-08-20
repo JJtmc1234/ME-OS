@@ -25,6 +25,9 @@ uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 void fb_clear(uint32_t colour);
 
+/* Fills an axis aligned rectangle, clipped to the framebuffer. */
+void fb_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t colour);
+
 /* Draws `s` with each font pixel expanded to a `scale` by `scale` block.
  * Anything falling outside the framebuffer is clipped. */
 void fb_draw_string(const char *s, uint64_t x, uint64_t y,

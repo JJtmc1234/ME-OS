@@ -17,6 +17,11 @@ bool fb_init(struct limine_framebuffer *fb)
     if (fb->width == 0 || fb->height == 0 || fb->pitch < fb->width * 4) {
         return false;
     }
+    /* Rows are addressed as uint32_t, so a pitch that is not a multiple of
+     * four would misalign every row after the first. */
+    if (fb->pitch % 4 != 0) {
+        return false;
+    }
 
     fb_base  = (volatile uint8_t *)fb->address;
     fb_w     = fb->width;
@@ -63,6 +68,15 @@ void fb_clear(uint32_t colour)
         volatile uint32_t *row = (volatile uint32_t *)(fb_base + y * fb_pitch);
         for (uint64_t x = 0; x < fb_w; x++) {
             row[x] = colour;
+        }
+    }
+}
+
+void fb_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t colour)
+{
+    for (uint64_t row = 0; row < h; row++) {
+        for (uint64_t col = 0; col < w; col++) {
+            put_pixel(x + col, y + row, colour);
         }
     }
 }
