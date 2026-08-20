@@ -1,0 +1,33 @@
+/* Minimal linear framebuffer output for the M1 boot proof.
+ *
+ * This is deliberately not a graphics abstraction. It clears the screen and
+ * draws bitmap glyphs, and nothing else.
+ */
+#ifndef ME_FB_H
+#define ME_FB_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "limine.h"
+
+/* Returns false if the framebuffer uses a layout this code cannot drive,
+ * in which case nothing has been written and no pointer is retained. */
+bool fb_init(struct limine_framebuffer *fb);
+
+uint64_t fb_width(void);
+uint64_t fb_height(void);
+
+/* Packs a colour for the framebuffer's actual channel masks rather than
+ * assuming 0xRRGGBB byte order. */
+uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b);
+
+void fb_clear(uint32_t colour);
+
+/* Draws `s` with each font pixel expanded to a `scale` by `scale` block.
+ * Anything falling outside the framebuffer is clipped. */
+void fb_draw_string(const char *s, uint64_t x, uint64_t y,
+                    uint32_t colour, uint64_t scale);
+
+#endif /* ME_FB_H */

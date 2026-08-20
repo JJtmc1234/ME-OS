@@ -1,0 +1,21 @@
+/* Tiny bitmap font used for M1 boot proof text.
+ *
+ * Glyphs are 8x8. Only the leftmost 5 columns are used, so bit 7 of each
+ * row byte is the leftmost pixel and bits 2..0 are always clear, giving a
+ * natural 3 pixel gap between characters.
+ */
+#ifndef ME_FONT_H
+#define ME_FONT_H
+
+#include <stdint.h>
+
+#define FONT_WIDTH  8
+#define FONT_HEIGHT 8
+
+/* Returns 8 row bytes for `c`, top row first.
+ * Unsupported characters return a hollow box so mistakes stay visible
+ * instead of silently rendering as blank space.
+ */
+const uint8_t *font_glyph(char c);
+
+#endif /* ME_FONT_H */

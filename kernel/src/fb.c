@@ -1,0 +1,99 @@
+#include "fb.h"
+#include "font.h"
+
+/* volatile: the compiler must not coalesce or drop stores to video memory,
+ * which it cannot prove anyone ever reads back. */
+static volatile uint8_t *fb_base;
+static uint64_t fb_w, fb_h, fb_pitch;
+static uint8_t r_size, r_shift, g_size, g_shift, b_size, b_shift;
+
+bool fb_init(struct limine_framebuffer *fb)
+{
+    /* 32 bits per pixel is what Limine hands us on UEFI. Refusing anything
+     * else is better than writing garbage through a mis-sized pointer. */
+    if (fb == NULL || fb->address == NULL || fb->bpp != 32) {
+        return false;
+    }
+    if (fb->width == 0 || fb->height == 0 || fb->pitch < fb->width * 4) {
+        return false;
+    }
+
+    fb_base  = (volatile uint8_t *)fb->address;
+    fb_w     = fb->width;
+    fb_h     = fb->height;
+    fb_pitch = fb->pitch;
+
+    r_size = fb->red_mask_size;   r_shift = fb->red_mask_shift;
+    g_size = fb->green_mask_size; g_shift = fb->green_mask_shift;
+    b_size = fb->blue_mask_size;  b_shift = fb->blue_mask_shift;
+
+    return true;
+}
+
+uint64_t fb_width(void)  { return fb_w; }
+uint64_t fb_height(void) { return fb_h; }
+
+/* Narrows an 8 bit component down to however many bits this channel has. */
+static uint32_t pack(uint8_t value, uint8_t size, uint8_t shift)
+{
+    if (size == 0 || size > 8) {
+        return 0;
+    }
+    return (uint32_t)(value >> (8 - size)) << shift;
+}
+
+uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    return pack(r, r_size, r_shift)
+         | pack(g, g_size, g_shift)
+         | pack(b, b_size, b_shift);
+}
+
+static void put_pixel(uint64_t x, uint64_t y, uint32_t colour)
+{
+    if (x >= fb_w || y >= fb_h) {
+        return;
+    }
+    *(volatile uint32_t *)(fb_base + y * fb_pitch + x * 4) = colour;
+}
+
+void fb_clear(uint32_t colour)
+{
+    for (uint64_t y = 0; y < fb_h; y++) {
+        volatile uint32_t *row = (volatile uint32_t *)(fb_base + y * fb_pitch);
+        for (uint64_t x = 0; x < fb_w; x++) {
+            row[x] = colour;
+        }
+    }
+}
+
+static void draw_char(char c, uint64_t x, uint64_t y,
+                      uint32_t colour, uint64_t scale)
+{
+    const uint8_t *glyph = font_glyph(c);
+
+    for (uint64_t row = 0; row < FONT_HEIGHT; row++) {
+        uint8_t bits = glyph[row];
+        for (uint64_t col = 0; col < FONT_WIDTH; col++) {
+            if ((bits & (0x80u >> col)) == 0) {
+                continue;
+            }
+            for (uint64_t sy = 0; sy < scale; sy++) {
+                for (uint64_t sx = 0; sx < scale; sx++) {
+                    put_pixel(x + col * scale + sx, y + row * scale + sy, colour);
+                }
+            }
+        }
+    }
+}
+
+void fb_draw_string(const char *s, uint64_t x, uint64_t y,
+                    uint32_t colour, uint64_t scale)
+{
+    if (scale == 0) {
+        scale = 1;
+    }
+    for (uint64_t i = 0; s[i] != '\0'; i++) {
+        draw_char(s[i], x + i * FONT_WIDTH * scale, y, colour, scale);
+    }
+}

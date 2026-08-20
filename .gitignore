@@ -1,0 +1,5 @@
+# Build output
+build/
+
+# Limine bootloader binaries, fetched by the Makefile at build time
+boot/limine/
