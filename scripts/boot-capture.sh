@@ -8,6 +8,9 @@
 #   build/screen-clamp.ppm  the framebuffer after the mouse is shoved hard
 #                           toward the corner, to show repeated movement works
 #                           and the cursor stays on screen
+#   build/screen-sum.ppm    the framebuffer after a sum is typed and evaluated
+#   build/screen-power.ppm  the framebuffer after a power is typed, which needs
+#                           a shifted key, and evaluated
 #   build/debug.log        kernel log via QEMU's debug port
 #   build/serial.log       the same log via COM1, which real hardware also has
 #
@@ -25,6 +28,13 @@ SHOT_BOOT="${SHOT_BOOT:-build/screen-boot.ppm}"
 SHOT_KEY="${SHOT_KEY:-build/screen-key.ppm}"
 SHOT_MOUSE="${SHOT_MOUSE:-build/screen-mouse.ppm}"
 SHOT_CLAMP="${SHOT_CLAMP:-build/screen-clamp.ppm}"
+SHOT_SUM="${SHOT_SUM:-build/screen-sum.ppm}"
+# The sum typed on the emulated keyboard. tests/check_boot.py expects this one,
+# so the two belong together.
+SUM_KEYS="${SUM_KEYS:-1 2 kp_add 3 0 ret}"
+SHOT_POWER="${SHOT_POWER:-build/screen-power.ppm}"
+# shift-6 is a caret, which is also a check that shift decoding works.
+POWER_KEYS="${POWER_KEYS:-2 shift-6 5 ret}"
 # How far to push the mouse. tests/check_boot.py checks the cursor moved by
 # exactly this, so the two belong together.
 MOUSE_DX="${MOUSE_DX:-120}"
@@ -53,6 +63,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_KEY"
 : > "$SHOT_MOUSE"
 : > "$SHOT_CLAMP"
+: > "$SHOT_SUM"
+: > "$SHOT_POWER"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -79,6 +91,21 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_CLAMP"
     sleep 2
+    # Type a sum one key at a time, then press enter to evaluate it.
+    for key in $SUM_KEYS; do
+        echo "sendkey $key"
+        sleep 1
+    done
+    sleep 2
+    echo "screendump $SHOT_SUM"
+    sleep 2
+    for key in $POWER_KEYS; do
+        echo "sendkey $key"
+        sleep 1
+    done
+    sleep 2
+    echo "screendump $SHOT_POWER"
+    sleep 2
     echo "quit"
 } | "$QEMU" \
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
@@ -93,9 +120,12 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"
 [ -s "$SHOT_MOUSE" ] || fail "QEMU produced no screenshot at $SHOT_MOUSE"
 [ -s "$SHOT_CLAMP" ] || fail "QEMU produced no screenshot at $SHOT_CLAMP"
+[ -s "$SHOT_SUM" ] || fail "QEMU produced no screenshot at $SHOT_SUM"
+[ -s "$SHOT_POWER" ] || fail "QEMU produced no screenshot at $SHOT_POWER"
 
-echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP"
+echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
+echo "boot-capture: typed the sum $SUM_KEYS, then the power $POWER_KEYS"
 if [ -s "$DEBUG_LOG" ]; then
     echo "boot-capture: kernel log"
     sed 's/^/    /' "$DEBUG_LOG"

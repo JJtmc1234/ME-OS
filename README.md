@@ -22,9 +22,10 @@ to a disk or a USB device.
 | M3 draw rectangle | A filled rectangle, with M1 and M2 untouched | Verified software milestone, QEMU |
 | M4 mouse cursor | A cursor that follows a mouse and stays on screen | Verified software milestone, QEMU |
 | M5 move rectangle | The rectangle crosses the screen over time | Verified software milestone, QEMU |
-| M6 basic arithmetic | Adds and subtracts, and shows the result | Next |
+| M6 basic arithmetic | Whole number sums typed on the keyboard, answered on screen | Verified software milestone, QEMU |
+| M7 conditionals | Simple if/else with visibly different outcomes | Next |
 
-All five milestones are checked automatically. `make test` boots the image
+All six milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding and pointer clamping on the development machine, without an emulator. See
@@ -56,6 +57,24 @@ around at each edge. It moves at a rate rather than at whatever speed this
 machine runs the loop, because the movement is driven by a clock. Nothing
 controls it yet: keys move the rectangle at M9, and it wraps around the edges
 instead of turning around at M10.
+
+**M6.** Type a sum and press enter, and the line above the message shows the
+answer. Addition, subtraction, multiplication, whole number division and powers,
+with the precedence they have on paper. Overflow, division by zero and
+fractional powers are refused and shown as `ERROR` rather than producing a wrong
+answer or faulting.
+
+| Key | In a sum |
+| --- | --- |
+| 0 to 9 | digits |
+| shift and = | plus |
+| minus | minus |
+| shift and 8, or keypad star | multiply |
+| slash | whole number divide |
+| shift and 6 | to the power of |
+| enter, or = | work it out |
+| backspace | delete the last character |
+| escape | clear the line |
 
 ## Build and run
 
@@ -103,7 +122,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
-                  timer, rectangle, logging, memory
+                  timer, rectangle, calculator, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)
 scripts/          headless boot capture for testing

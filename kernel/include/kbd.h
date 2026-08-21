@@ -23,6 +23,14 @@ struct kbd_key {
 /* Drains anything the firmware left in the controller's output buffer. */
 void kbd_init(void);
 
+/* Pure: the shift state after seeing one scancode byte. Shift is the only
+ * modifier decoded, because it is the only one the symbols need. */
+bool kbd_shift_after(uint8_t code, bool shift);
+
+/* Pure: the key a make code means, with shift held or not. False when this
+ * milestone does not decode that key. */
+bool kbd_translate(uint8_t code, bool shift, struct kbd_key *out);
+
 /* True when a key was pressed since the last call. Key releases, key repeats
  * of the extended set, and unmapped keys are discarded. */
 bool kbd_poll(struct kbd_key *out);

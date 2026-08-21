@@ -22,8 +22,8 @@ Nothing here has been booted on a physical machine yet.
 | M3 | Draw rectangle | A filled rectangle appears at chosen coordinates in a chosen colour, without disturbing M1 or M2 | Verified software milestone |
 | M4 | Mouse cursor | A cursor is drawn, moves with a pointing device, and stays on screen | Verified software milestone |
 | M5 | Move rectangle | The rectangle moves across the screen over time, staying whole and on screen | Verified software milestone |
-| M6 | Basic arithmetic | Correctly evaluates simple integer addition and subtraction and shows the result | Next |
-| M7 | Conditionals | Runs simple if/else logic and visibly demonstrates different outcomes | Planned |
+| M6 | Basic arithmetic | Evaluates whole number arithmetic typed on the keyboard and shows the result | Verified software milestone |
+| M7 | Conditionals | Runs simple if/else logic and visibly demonstrates different outcomes | Next |
 | M8 | Variables | Stores and updates named values, and shows them changing | Planned |
 | M9 | Keyboard controlled rectangle | Arrow or letter keys move the rectangle | Planned |
 | M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Planned |
@@ -44,7 +44,7 @@ management, interrupts, processes or filesystems.
 
 ## Verification status
 
-M1 to M5 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M6 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -52,10 +52,12 @@ Two kinds of test run:
 
 - `make test-unit` checks, on the development machine and without an emulator,
   that framebuffer drawing clips at every edge, that mouse packets decode and
-  pointer movement clamps correctly, and that timer wrap arithmetic and the
-  rectangle's movement hold over long runs.
+  pointer movement clamps correctly, that timer wrap arithmetic and the
+  rectangle's movement hold over long runs, that scancodes translate with and
+  without shift, and that arithmetic gets the right answer and refuses overflow,
+  division by zero and fractional powers. 228 checks in five programs.
 - `make test` boots the real image headlessly, injects a key press, moves the
-  mouse, and inspects four captured framebuffers: the message, the key line, a
-  rectangle that is whole, on screen and in a different place each time, and a
-  cursor that starts in the right place, follows the mouse exactly, keeps its
-  shape, and stays on screen.
+  mouse, types two sums, and inspects six captured framebuffers: the sum line,
+  the message, the key line, a rectangle that is whole, on screen and in a
+  different place each time, and a cursor that starts in the right place,
+  follows the mouse exactly, keeps its shape, and stays on screen.

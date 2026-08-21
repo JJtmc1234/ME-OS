@@ -11,6 +11,7 @@ milestones:
   M4  a cursor that starts where it should, moves when the mouse moves, keeps
       its shape, and stops at the edge of the screen instead of leaving it
   M5  the rectangle crossing the screen over time, staying whole and on screen
+  M6  a sum typed on the keyboard, evaluated, and shown with its result
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -28,6 +29,8 @@ SCREEN_BOOT = ROOT / "build" / "screen-boot.ppm"
 SCREEN_KEY = ROOT / "build" / "screen-key.ppm"
 SCREEN_MOUSE = ROOT / "build" / "screen-mouse.ppm"
 SCREEN_CLAMP = ROOT / "build" / "screen-clamp.ppm"
+SCREEN_SUM = ROOT / "build" / "screen-sum.ppm"
+SCREEN_POWER = ROOT / "build" / "screen-power.ppm"
 DEBUG_LOG = ROOT / "build" / "debug.log"
 SERIAL_LOG = ROOT / "build" / "serial.log"
 
@@ -36,6 +39,12 @@ M1_MESSAGE = "IF YOU SEE THIS IT WORKED"
 M2_PROMPT = "PRESS A KEY"
 KEY_SENT = "A"
 M2_AFTER_KEY = f"LAST KEY {KEY_SENT}"
+# M6. These mirror scripts/boot-capture.sh, which types 12 + 30 and presses
+# enter, and kernel/src/calc.c, which owns the prompt.
+M6_PROMPT = "TYPE A SUM"
+M6_SUM = "12+30=42"
+M6_POWER = "2^5=32"
+M6_AFTER_ENTER = "LAST KEY ENTER"
 
 # These mirror kernel/src/main.c too.
 RECT_COLOUR = (60, 170, 220)
@@ -78,6 +87,22 @@ class Band:
     @property
     def centre_y(self) -> float:
         return (self.top + self.bottom) / 2
+
+    @property
+    def word_gaps(self) -> int:
+        """Gaps wide enough to be a space rather than the gap between glyphs."""
+        columns = sorted(self.columns)
+        if len(columns) < 2:
+            return 0
+        # A glyph cell is eight pixels at scale one; the gap inside a word is
+        # three. Anything wider than half a cell of scaled space is a word gap.
+        scale = max(1, self.height // INK_HEIGHT)
+        threshold = 5 * scale
+        return sum(1 for a, b in zip(columns, columns[1:]) if b - a > threshold)
+
+    @property
+    def lit(self) -> int:
+        return len(self.columns)
 
     @property
     def glyphs(self) -> int:
@@ -188,7 +213,16 @@ def check_line(band: Band, text: str, label: str, name: str) -> str:
             f"{name}: the {label} line has {band.glyphs} glyphs, "
             f"expected {expected} for {text!r}"
         )
-    return f"{label}: {band.glyphs} glyphs, scale {band.height // INK_HEIGHT}"
+    # Two different lines can have the same number of glyphs. The spaces
+    # between words are what tells TYPE A SUM apart from 12+30=42.
+    spaces = text.count(" ")
+    if band.word_gaps != spaces:
+        raise CheckFailed(
+            f"{name}: the {label} line has {band.word_gaps} word gaps, "
+            f"expected {spaces} for {text!r}"
+        )
+    return (f"{label}: {band.glyphs} glyphs, {spaces} spaces, "
+            f"scale {band.height // INK_HEIGHT}")
 
 
 def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
@@ -236,19 +270,23 @@ def cursor_corner(cursor: set[tuple[int, int]], name: str) -> tuple[int, int, in
     return min(xs), min(ys), len(cursor)
 
 
-def check_screen(path: Path, key_line_text: str):
+def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT):
     width, height, bands, rect, cursor = find_bands(path)
     notes = [f"{path.name}: {width}x{height}, {len(bands)} text lines"]
 
-    if len(bands) != 2:
+    if len(bands) != 3:
         raise CheckFailed(
-            f"{path.name}: expected two lines, the M1 message and the key line, "
-            f"found {len(bands)}"
+            f"{path.name}: expected three lines, the M6 sum line, the M1 message "
+            f"and the key line, found {len(bands)}"
         )
 
-    message, key_line = bands
+    sum_line, message, key_line = bands
+    notes.append("  " + check_line(sum_line, sum_line_text, "M6 sum line", path.name))
     notes.append("  " + check_line(message, M1_MESSAGE, "M1 message", path.name))
     notes.append("  " + check_line(key_line, key_line_text, "M2 key line", path.name))
+
+    if sum_line.bottom >= message.top:
+        raise CheckFailed(f"{path.name}: the sum line is not above the M1 message")
 
     scale = message.height // INK_HEIGHT
     if abs(message.centre_x - width / 2) > FONT_WIDTH * scale:
@@ -266,7 +304,7 @@ def check_screen(path: Path, key_line_text: str):
     notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
 
     rect_left = min(x for x, _ in rect)
-    return notes, (left, top, pixels), (width, height), rect_left
+    return notes, (left, top, pixels), (width, height), rect_left, sum_line.lit
 
 
 def check_log() -> list[str]:
@@ -279,7 +317,10 @@ def check_log() -> list[str]:
         "mouse ready",
         "timer ready",
         "drew the M4 cursor",
+        "drew the M6 sum line",
         f"key {KEY_SENT}",
+        "sum 12+30 = 42",
+        "sum 2^5 = 32",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -292,8 +333,9 @@ def check_log() -> list[str]:
             if phrase not in text:
                 raise CheckFailed(f"{name} log never reported {phrase!r}")
         notes.append(
-            f"{name} log: boot, message, rectangle, cursor, mouse and keyboard ready, "
-            f"key {KEY_SENT} received")
+            f"{name} log: boot, message, rectangle, cursor, sum line, key "
+            f"{KEY_SENT} received, and the kernel's own answers of 12+30 = 42 "
+            f"and 2^5 = 32")
     return notes
 
 
@@ -350,18 +392,40 @@ def check_rectangle_movement(positions, size) -> list[str]:
 
 def main() -> int:
     try:
-        notes, boot_cursor, size, rect_boot = check_screen(SCREEN_BOOT, M2_PROMPT)
-        key_notes, key_cursor, _, rect_key = check_screen(SCREEN_KEY, M2_AFTER_KEY)
-        mouse_notes, moved_cursor, _, rect_mouse = check_screen(SCREEN_MOUSE, M2_AFTER_KEY)
-        clamp_notes, clamped_cursor, _, rect_clamp = check_screen(SCREEN_CLAMP, M2_AFTER_KEY)
-        notes += key_notes + mouse_notes + clamp_notes
+        notes, boot_cursor, size, rect_boot, sum_boot = check_screen(
+            SCREEN_BOOT, M2_PROMPT)
+        key_notes, key_cursor, _, rect_key, _ = check_screen(SCREEN_KEY, M2_AFTER_KEY)
+        mouse_notes, moved_cursor, _, rect_mouse, _ = check_screen(
+            SCREEN_MOUSE, M2_AFTER_KEY)
+        clamp_notes, clamped_cursor, _, rect_clamp, sum_clamp = check_screen(
+            SCREEN_CLAMP, M2_AFTER_KEY)
+        typed_notes, _, _, rect_sum, sum_typed = check_screen(
+            SCREEN_SUM, M6_AFTER_ENTER, M6_SUM)
+        power_notes, _, _, rect_power, sum_power = check_screen(
+            SCREEN_POWER, M6_AFTER_ENTER, M6_POWER)
+        notes += key_notes + mouse_notes + clamp_notes + typed_notes + power_notes
+
+        if sum_typed == sum_clamp:
+            raise CheckFailed(
+                "the sum line looks identical before and after typing; it should "
+                "have changed from the prompt to the sum and its result"
+            )
+        if sum_power == sum_typed:
+            raise CheckFailed(
+                "the sum line did not change between the two sums; the second "
+                "one should have replaced the first"
+            )
+        notes.append(
+            f"  M6 sum line changed from {sum_clamp} lit columns to {sum_typed} "
+            f"after typing {M6_SUM.split('=')[0]}, then to {sum_power} after "
+            f"{M6_POWER.split('=')[0]}, which needs a shifted key")
 
         if key_cursor[:2] != boot_cursor[:2]:
             raise CheckFailed("the cursor moved on its own before the mouse was touched")
 
         notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
         notes += check_rectangle_movement(
-            [rect_boot, rect_key, rect_mouse, rect_clamp], size)
+            [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power], size)
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -369,8 +433,8 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M5 checks passed: message, key press, a rectangle that moves, and a "
-          "cursor that follows the mouse")
+    print("M1 to M6 checks passed: message, key press, a moving rectangle, a cursor "
+          "that follows the mouse, and a sum typed and answered")
     print("A person should still watch it boot once with make run.")
     return 0
 

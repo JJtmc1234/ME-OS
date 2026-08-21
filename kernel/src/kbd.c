@@ -11,6 +11,9 @@
 #define SCANCODE_RELEASE 0x80    /* set in the make code of a key being released */
 #define SCANCODE_EXTENDED 0xE0   /* prefix, the real code is the next byte */
 
+#define SCANCODE_LEFT_SHIFT  0x2A
+#define SCANCODE_RIGHT_SHIFT 0x36
+
 static uint8_t inb(uint16_t port)
 {
     uint8_t value;
@@ -30,6 +33,18 @@ static const char printable[128] = {
     [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B',
     [0x31] = 'N', [0x32] = 'M',
     [0x39] = ' ',
+    /* Arithmetic, from the main row and the keypad. No shift handling, so the
+     * unshifted key is what counts: '=' is a key, '+' comes from the keypad. */
+    [0x0C] = '-', [0x0D] = '=', [0x35] = '/',
+    [0x4A] = '-', [0x4E] = '+', [0x37] = '*',
+};
+
+/* Only the shifted keys the calculator needs. Everything else is unaffected,
+ * since the letters this milestone decodes are already uppercase. */
+static const char shifted[128] = {
+    [0x07] = '^',   /* shift and 6 */
+    [0x09] = '*',   /* shift and 8 */
+    [0x0D] = '+',   /* shift and equals */
 };
 
 static const char *named(uint8_t code)
@@ -41,6 +56,45 @@ static const char *named(uint8_t code)
     case 0x1C: return "ENTER";
     default:   return NULL;
     }
+}
+
+bool kbd_shift_after(uint8_t code, bool shift)
+{
+    const uint8_t key = (uint8_t)(code & 0x7F);
+    if (key != SCANCODE_LEFT_SHIFT && key != SCANCODE_RIGHT_SHIFT) {
+        return shift;
+    }
+    return (code & SCANCODE_RELEASE) == 0;
+}
+
+bool kbd_translate(uint8_t code, bool shift, struct kbd_key *out)
+{
+    if (out == NULL || (code & SCANCODE_RELEASE) != 0) {
+        return false;
+    }
+
+    const uint8_t key = (uint8_t)(code & 0x7F);
+
+    if (shift && shifted[key] != '\0') {
+        out->ch = shifted[key];
+        out->name = NULL;
+        return true;
+    }
+
+    const char ch = printable[key];
+    if (ch != '\0') {
+        out->ch = ch;
+        out->name = NULL;
+        return true;
+    }
+
+    const char *name = named(key);
+    if (name != NULL) {
+        out->ch = '\0';
+        out->name = name;
+        return true;
+    }
+    return false;
 }
 
 static bool byte_waiting(void)
@@ -62,6 +116,7 @@ void kbd_init(void)
 bool kbd_poll(struct kbd_key *out)
 {
     static bool extended = false;
+    static bool shift = false;
 
     if (out == NULL || !byte_waiting()) {
         return false;
@@ -73,28 +128,16 @@ bool kbd_poll(struct kbd_key *out)
         extended = true;
         return false;
     }
-    /* Arrow keys and friends arrive with the extended prefix. M2 has nothing
-     * to do with them, so the code after the prefix is dropped. */
+    /* Arrow keys and friends arrive with the extended prefix. Nothing so far
+     * has anything to do with them, so the code after the prefix is dropped. */
     if (extended) {
         extended = false;
         return false;
     }
-    if ((code & SCANCODE_RELEASE) != 0) {
-        return false;  /* key going up, not down */
-    }
 
-    char ch = printable[code & 0x7F];
-    if (ch != '\0') {
-        out->ch = ch;
-        out->name = NULL;
-        return true;
-    }
+    /* Shift has to be seen going down and coming back up, so this happens
+     * before releases are discarded. */
+    shift = kbd_shift_after(code, shift);
 
-    const char *name = named(code);
-    if (name != NULL) {
-        out->ch = '\0';
-        out->name = name;
-        return true;
-    }
-    return false;
+    return kbd_translate(code, shift, out);
 }

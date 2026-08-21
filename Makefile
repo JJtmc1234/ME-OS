@@ -200,10 +200,21 @@ $(BUILD)/timer_rect_test: tests/timer_rect_test.c kernel/src/timer.c kernel/src/
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c -o $@
 
-test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test
+$(BUILD)/calc_test: tests/calc_test.c kernel/src/calc.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/calc_test.c kernel/src/calc.c -o $@
+
+$(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c -o $@
+
+test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
+           $(BUILD)/calc_test $(BUILD)/kbd_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
+	$(BUILD)/calc_test
+	$(BUILD)/kbd_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

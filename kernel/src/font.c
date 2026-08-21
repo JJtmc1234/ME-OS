@@ -55,6 +55,28 @@ static const uint8_t glyphs_09[10][FONT_HEIGHT] = {
     {0x70, 0x88, 0x88, 0x78, 0x08, 0x10, 0x60, 0x00}, /* 9 */
 };
 
+/* The three symbols arithmetic needs. Same 5x7 cell rules: bits 2 to 0 stay
+ * clear so characters keep their gap. */
+static const uint8_t glyph_plus[FONT_HEIGHT] = {
+    0x00, 0x20, 0x20, 0xF8, 0x20, 0x20, 0x00, 0x00,
+};
+static const uint8_t glyph_minus[FONT_HEIGHT] = {
+    0x00, 0x00, 0x00, 0xF8, 0x00, 0x00, 0x00, 0x00,
+};
+static const uint8_t glyph_equals[FONT_HEIGHT] = {
+    0x00, 0x00, 0xF8, 0x00, 0xF8, 0x00, 0x00, 0x00,
+};
+
+static const uint8_t glyph_star[FONT_HEIGHT] = {
+    0x00, 0xA8, 0x70, 0xF8, 0x70, 0xA8, 0x00, 0x00,
+};
+static const uint8_t glyph_slash[FONT_HEIGHT] = {
+    0x08, 0x08, 0x10, 0x20, 0x40, 0x80, 0x80, 0x00,
+};
+static const uint8_t glyph_caret[FONT_HEIGHT] = {
+    0x20, 0x50, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
 const uint8_t *font_glyph(char c)
 {
     if (c == ' ') {
@@ -65,6 +87,24 @@ const uint8_t *font_glyph(char c)
     }
     if (c >= '0' && c <= '9') {
         return glyphs_09[c - '0'];
+    }
+    if (c == '+') {
+        return glyph_plus;
+    }
+    if (c == '-') {
+        return glyph_minus;
+    }
+    if (c == '=') {
+        return glyph_equals;
+    }
+    if (c == '*') {
+        return glyph_star;
+    }
+    if (c == '/') {
+        return glyph_slash;
+    }
+    if (c == '^') {
+        return glyph_caret;
     }
     return glyph_unknown;
 }

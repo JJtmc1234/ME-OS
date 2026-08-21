@@ -33,12 +33,13 @@ references them and `--gc-sections` would otherwise discard them.
 | `main.c` | milestone logic: what gets drawn, and the input loop |
 | `fb.c` | linear framebuffer: clear, fill a rectangle, draw a string |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
-| `kbd.c` | polled PS/2 keyboard, scancode set 1 |
+| `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift |
 | `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
 | `pointer.c` | where the pointer is, and clamping it to the screen |
 | `cursor.c` | drawing the cursor, and putting back what it covered |
 | `timer.c` | elapsed time, polled from the programmable interval timer |
 | `rect.c` | where the moving rectangle is, given how much time has passed |
+| `calc.c` | parsing and evaluating a typed sum, with checked arithmetic |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -60,6 +61,15 @@ packets, `pointer.c` holds the position and clamps it, `cursor.c` draws it.
 A second input device would touch only the first of those, and a different
 cursor only the last. Decoding and clamping are pure functions, which is why
 both can be tested on an ordinary machine.
+
+**Arithmetic refuses rather than wraps.** Every operation in `calc.c` is
+checked before it happens: addition and subtraction against the limits,
+multiplication by dividing the limit rather than by multiplying and looking at
+the result afterwards, division against zero and against the one case whose
+answer will not fit, and powers by repeating a checked multiplication. Checking
+afterwards was tried first and did not work: signed overflow is undefined, so
+the compiler was entitled to delete the check that was meant to catch it, and it
+did. The host tests caught that.
 
 **Time comes from a counter, not from the loop.** The PIT's channel 0 counts
 down and wraps about every 55 milliseconds. The loop reads it, adds up the

@@ -7,6 +7,8 @@
  * M4: show a mouse cursor that moves, without disturbing any of them.
  * M5: move the rectangle across the screen over time, still without
  *     disturbing any of them.
+ * M6: add and subtract whole numbers typed on the keyboard, and show the
+ *     result, still without disturbing any of them.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -15,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "calc.h"
 #include "cursor.h"
 #include "fb.h"
 #include "font.h"
@@ -29,6 +32,8 @@
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
 #define M2_PREFIX   "LAST KEY "
+/* M6: the sum line sits above the message, in the empty half of the screen. */
+#define M6_LINE_GAP 2
 
 /* M3: one static rectangle. Its size is a fraction of the screen so it stays
  * clearly visible at any resolution. tests/check_boot.py mirrors these two
@@ -71,6 +76,8 @@ static uint64_t key_line_scale;
 static uint32_t colour_text;
 static uint32_t colour_background;
 static uint32_t colour_rect;
+static uint64_t sum_line_y;
+static struct calc calc_state;
 static uint32_t colour_cursor;
 static struct pointer pointer_state;
 static struct moving_rect rect_state;
@@ -172,6 +179,61 @@ static void draw_rect(void)
         cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
                     colour_cursor, colour_background);
     }
+}
+
+/* Redraws the sum line. Same rule as every other drawing routine: the cursor
+ * holds a copy of the pixels underneath it, so it comes down first. */
+static void draw_sum_line(void)
+{
+    char line[CALC_MAX_INPUT + CALC_MAX_NUMBER + 2];
+    const uint64_t height = FONT_HEIGHT * key_line_scale;
+    const bool had_cursor = cursor_visible();
+
+    calc_line(&calc_state, line, sizeof line);
+
+    if (had_cursor) {
+        cursor_hide();
+    }
+
+    fb_fill_rect(0, sum_line_y, fb_width(), height, colour_background);
+    fb_draw_string(line, centred_x(str_len(line), key_line_scale),
+                   sum_line_y, colour_text, key_line_scale);
+
+    if (had_cursor) {
+        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                    colour_cursor, colour_background);
+    }
+}
+
+static bool same_name(const char *a, const char *b)
+{
+    for (uint64_t i = 0; a[i] != '\0' || b[i] != '\0'; i++) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Turns a key press into the character the calculator understands, or 0. */
+static char calc_char_for(const struct kbd_key *key)
+{
+    if (key->ch != '\0') {
+        return key->ch;
+    }
+    if (key->name == NULL) {
+        return '\0';
+    }
+    if (same_name(key->name, "ENTER")) {
+        return CALC_EVALUATE;
+    }
+    if (same_name(key->name, "BACKSPACE")) {
+        return CALC_DELETE;
+    }
+    if (same_name(key->name, "ESCAPE")) {
+        return CALC_CLEAR;
+    }
+    return '\0';
 }
 
 static void show_key(const struct kbd_key *key)
@@ -285,6 +347,14 @@ void kmain(void)
     log_dec(rect_y);
     log_str("\n");
 
+    /* M6: the sum line, above the message, in the emptier half of the screen. */
+    sum_line_y = y > FONT_HEIGHT * key_line_scale * M6_LINE_GAP
+        ? y - FONT_HEIGHT * key_line_scale * M6_LINE_GAP
+        : 0;
+    calc_reset(&calc_state);
+    draw_sum_line();
+    log_stage("drew the M6 sum line");
+
     kbd_init();
     log_stage("keyboard ready, waiting for keys");
 
@@ -322,6 +392,25 @@ void kmain(void)
 
         if (kbd_poll(&key)) {
             show_key(&key);
+
+            const char typed = calc_char_for(&key);
+            if (typed != '\0' && calc_key(&calc_state, typed)) {
+                draw_sum_line();
+                if (calc_state.has_result) {
+                    log_str("me-os: sum ");
+                    log_str(calc_state.text);
+                    log_str(" = ");
+                    if (calc_state.result < 0) {
+                        log_str("-");
+                        log_dec((uint64_t)(-(calc_state.result + 1)) + 1u);
+                    } else {
+                        log_dec((uint64_t)calc_state.result);
+                    }
+                    log_str("\n");
+                } else if (calc_state.error) {
+                    log_stage("sum could not be evaluated");
+                }
+            }
         }
 
         if (rect_advance(&rect_state, timer_poll(), TIMER_HZ, fb_width())) {
