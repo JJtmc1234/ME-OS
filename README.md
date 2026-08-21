@@ -25,9 +25,10 @@ to a disk or a USB device.
 | M6 basic arithmetic | Whole number sums typed on the keyboard, answered on screen | Verified software milestone, QEMU |
 | M7 conditionals | One IF, taking either branch, shown on screen | Verified software milestone, QEMU |
 | M8 variables | Named values that can be stored and changed | Verified software milestone, QEMU |
+| M12 rotating triangle and floating point | SSE turned on deliberately, and a triangle turning on a timer | Verified software milestone, QEMU |
 | M9 keyboard controlled rectangle | Keys move the rectangle | Next |
 
-All eight milestones are checked automatically. `make test` boots the image
+All nine finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -82,6 +83,18 @@ worked out, so a branch that overflows makes the whole line an error even when
 it is not the one taken. Enter is the only key that evaluates, because `=` is
 something someone might want to type: at M7 as a comparison, and at M8 as an
 assignment.
+
+**M12.** A triangle turns about its own centre, below everything else on the
+screen, at a fixed speed driven by the same clock the rectangle uses. It is
+drawn as three lines, in software, straight into the framebuffer: there is no
+graphics acceleration of any kind and none is planned.
+
+This is the milestone where the kernel gained floating point. x86-64 guarantees
+SSE2, so the kernel enables that and nothing else, after checking CPUID for it.
+Every file is still compiled with SSE off except the one that does the
+arithmetic, and the build refuses to link if a floating point instruction turns
+up anywhere else. Everything that file exposes takes and returns integers, so
+nothing can call into it before the processor has been told to allow it.
 
 **M8.** A value can be given a name, and the name used on any later line:
 
@@ -167,6 +180,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
+                  floating point, geometry,
                   timer, rectangle, calculator, variables, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)

@@ -16,6 +16,9 @@ milestones:
       branches and showing different answers
   M8  a value stored under a name, then used in a sum and in a conditional on
       later lines, which only works if it was really remembered
+  M12 a triangle turning about its own centre, drawn with floating point:
+      present in every capture, whole, on screen, and in a different position
+      each time
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -72,6 +75,19 @@ RECT_WIDTH_DIVISOR = 4
 RECT_HEIGHT_DIVISOR = 14
 
 CURSOR_COLOUR = (255, 214, 64)
+
+# M12. These mirror kernel/src/main.c and kernel/src/geometry.c.
+TRIANGLE_COLOUR = (80, 220, 120)
+TRIANGLE_CENTRE_X_DIVISOR = 2
+TRIANGLE_CENTRE_Y_PARTS = 7
+TRIANGLE_CENTRE_Y_DIVISOR = 8
+TRIANGLE_RADIUS_DIVISOR = 12
+# 800 / 12 / 8, the wobble allowed in where the drawn outline averages to.
+TRIANGLE_RADIUS_ALLOWANCE = 8
+
+# Every triangle seen, in capture order. Filled in by check_screen so the run
+# can compare one capture against the next without every caller carrying it.
+TRIANGLES: list[tuple[str, tuple[float, float], frozenset]] = []
 CURSOR_START_X_DIVISOR = 4
 CURSOR_START_Y_DIVISOR = 6
 # Must match scripts/boot-capture.sh.
@@ -179,6 +195,7 @@ def read_screen(path: Path):
     rows: dict[int, set[int]] = {}
     rect: set[tuple[int, int]] = set()
     cursor: set[tuple[int, int]] = set()
+    triangle: set[tuple[int, int]] = set()
 
     for index in range(0, len(pixels), 3):
         colour = (pixels[index], pixels[index + 1], pixels[index + 2])
@@ -192,21 +209,23 @@ def read_screen(path: Path):
             rect.add((x, y))
         elif colour == CURSOR_COLOUR:
             cursor.add((x, y))
+        elif colour == TRIANGLE_COLOUR:
+            triangle.add((x, y))
         else:
             raise CheckFailed(
                 f"{path.name}: pixel at ({x}, {y}) is rgb{colour}; expected black, "
                 f"white text, the M3 rectangle rgb{RECT_COLOUR}, or the M4 cursor "
-                f"rgb{CURSOR_COLOUR}"
+                f"rgb{CURSOR_COLOUR}, or the M12 triangle rgb{TRIANGLE_COLOUR}"
             )
 
     if not rows:
         raise CheckFailed(f"{path.name}: no white text on the screen")
-    return width, height, rows, rect, cursor
+    return width, height, rows, rect, cursor, triangle
 
 
 def find_bands(path: Path):
     """Split the white pixels into horizontal bands of text."""
-    width, height, rows, rect, cursor = read_screen(path)
+    width, height, rows, rect, cursor, triangle = read_screen(path)
 
     bands: list[Band] = []
     current: dict[int, set[int]] = {}
@@ -218,7 +237,7 @@ def find_bands(path: Path):
         current[row] = rows[row]
         previous = row
     bands.append(Band(current))
-    return width, height, bands, rect, cursor
+    return width, height, bands, rect, cursor, triangle
 
 
 def check_line(band: Band, text: str, label: str, name: str) -> str:
@@ -290,8 +309,52 @@ def cursor_corner(cursor: set[tuple[int, int]], name: str) -> tuple[int, int, in
     return min(xs), min(ys), len(cursor)
 
 
+def check_triangle(triangle: set[tuple[int, int]], width: int, height: int,
+                   name: str) -> tuple[str, tuple[float, float], frozenset]:
+    """M12: drawn, whole, on screen, the right size, and about its centre."""
+    if not triangle:
+        raise CheckFailed(f"{name}: the M12 triangle is missing")
+
+    xs = [x for x, _ in triangle]
+    ys = [y for _, y in triangle]
+    left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+
+    if left < 0 or top < 0 or right >= width or bottom >= height:
+        raise CheckFailed(f"{name}: the triangle is not fully on screen")
+
+    expected_x = width // TRIANGLE_CENTRE_X_DIVISOR
+    expected_y = height * TRIANGLE_CENTRE_Y_PARTS // TRIANGLE_CENTRE_Y_DIVISOR
+    radius = height // TRIANGLE_RADIUS_DIVISOR
+
+    # The centre is the average of the drawn pixels, not the middle of the
+    # bounding box. A triangle's box is not centred on the shape: as it turns,
+    # the box slides about by a quarter of the radius even though the triangle
+    # has not moved at all. The average of an evenly drawn outline does not.
+    centre = (sum(xs) / len(xs), sum(ys) / len(ys))
+    if abs(centre[0] - expected_x) > radius * 0.5:
+        raise CheckFailed(
+            f"{name}: the triangle is at x={centre[0]:.0f}, expected about {expected_x}")
+    if abs(centre[1] - expected_y) > radius * 0.6:
+        raise CheckFailed(
+            f"{name}: the triangle is at y={centre[1]:.0f}, expected about {expected_y}")
+
+    # It has to fit inside the circle it was given, with a little slack for
+    # rounding and for the thickness of the line itself.
+    span = max(right - left, bottom - top)
+    if span > 2 * radius + 4:
+        raise CheckFailed(
+            f"{name}: the triangle spans {span} pixels, more than a circle of "
+            f"radius {radius} allows")
+    if span < radius:
+        raise CheckFailed(f"{name}: the triangle spans only {span} pixels, too small")
+
+    note = (f"M12 triangle: {len(triangle)} pixels, {span} across, centred near "
+            f"({centre[0]:.0f}, {centre[1]:.0f})")
+    return note, centre, frozenset(triangle)
+
+
 def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT):
-    width, height, bands, rect, cursor = find_bands(path)
+    width, height, bands, rect, cursor, triangle = find_bands(path)
     notes = [f"{path.name}: {width}x{height}, {len(bands)} text lines"]
 
     if len(bands) != 3:
@@ -323,6 +386,11 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
         raise CheckFailed(f"{path.name}: the cursor is outside the screen")
     notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
 
+    triangle_note, triangle_centre, triangle_pixels = check_triangle(
+        triangle, width, height, path.name)
+    notes.append("  " + triangle_note)
+    TRIANGLES.append((path.name, triangle_centre, triangle_pixels))
+
     rect_left = min(x for x, _ in rect)
     return notes, (left, top, pixels), (width, height), rect_left, sum_line.ink
 
@@ -338,6 +406,7 @@ def check_log() -> list[str]:
         "timer ready",
         "drew the M4 cursor",
         "drew the M6 sum line",
+        "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
         "sum 2^5 = 32",
@@ -423,6 +492,45 @@ def check_rectangle_movement(positions, size) -> list[str]:
     return [f"  M5 rectangle moved across {travelled} pixels: {positions}"]
 
 
+def check_rotation() -> list[str]:
+    """M12: the triangle turns, and turns about a fixed point.
+
+    One screenshot proves a triangle was drawn. Several, taken seconds apart,
+    prove it is turning: the pixels have to differ while the centre stays where
+    it was put.
+    """
+    if len(TRIANGLES) < 2:
+        raise CheckFailed("not enough captures to tell whether the triangle turns")
+
+    shapes = {pixels for _, _, pixels in TRIANGLES}
+    if len(shapes) == 1:
+        raise CheckFailed(
+            f"the triangle was drawn identically in all {len(TRIANGLES)} captures; "
+            f"it should have turned between them")
+
+    xs = [centre[0] for _, centre, _ in TRIANGLES]
+    ys = [centre[1] for _, centre, _ in TRIANGLES]
+    drift = max(max(xs) - min(xs), max(ys) - min(ys))
+
+    # An eighth of the radius. The centre of the drawn outline wobbles by a few
+    # pixels as the triangle turns, because the three edges land on slightly
+    # different numbers of pixels at different angles. That is the drawing, not
+    # the geometry: tests/geometry_test.c measures the real centre over four
+    # hundred turns and finds it moves half a pixel. A triangle that was
+    # actually drifting would move tens of pixels, not a handful.
+    allowed = (TRIANGLE_RADIUS_ALLOWANCE)
+    if drift > allowed:
+        raise CheckFailed(
+            f"the triangle's centre wandered {drift:.0f} pixels across the captures, "
+            f"more than the {allowed} that drawing explains; it should turn about a "
+            f"fixed point")
+
+    return [
+        f"  M12 triangle turned: {len(shapes)} different shapes across "
+        f"{len(TRIANGLES)} captures, centre steady within {drift:.0f} pixels",
+    ]
+
+
 def main() -> int:
     try:
         notes, boot_cursor, size, rect_boot, sum_boot = check_screen(
@@ -502,6 +610,7 @@ def main() -> int:
         notes += check_rectangle_movement(
             [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power,
              rect_true, rect_false, rect_assign, rect_var, rect_varif], size)
+        notes += check_rotation()
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -509,9 +618,10 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M8 checks passed: message, key press, a moving rectangle, a cursor "
-          "that follows the mouse, sums answered, a conditional taking each "
-          "branch in turn, and a value remembered under a name and used again")
+    print("M1 to M8 and M12 checks passed: message, key press, a moving rectangle, "
+          "a cursor that follows the mouse, sums answered, a conditional taking each "
+          "branch in turn, a value remembered under a name and used again, and a "
+          "triangle turning about its own centre")
     print("A person should still watch it boot once with make run.")
     return 0
 

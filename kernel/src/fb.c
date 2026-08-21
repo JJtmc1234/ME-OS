@@ -94,6 +94,47 @@ void fb_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t colou
     }
 }
 
+/* Bresenham. Integer only: it decides each step by comparing errors rather
+ * than by dividing, which is why it belongs here rather than in the module
+ * that does the rotation. Every pixel goes through the clipped write, so a
+ * line running off the screen simply draws less of itself. */
+void fb_draw_line(int64_t x0, int64_t y0, int64_t x1, int64_t y1, uint32_t colour)
+{
+    const int64_t step_x = x0 < x1 ? 1 : -1;
+    const int64_t step_y = y0 < y1 ? 1 : -1;
+    int64_t dx = x1 - x0;
+    int64_t dy = y1 - y0;
+
+    if (dx < 0) {
+        dx = -dx;
+    }
+    if (dy < 0) {
+        dy = -dy;
+    }
+    dy = -dy;
+
+    int64_t error = dx + dy;
+
+    for (;;) {
+        if (x0 >= 0 && y0 >= 0) {
+            fb_put_pixel((uint64_t)x0, (uint64_t)y0, colour);
+        }
+        if (x0 == x1 && y0 == y1) {
+            return;
+        }
+
+        const int64_t doubled = 2 * error;
+        if (doubled >= dy) {
+            error += dy;
+            x0 += step_x;
+        }
+        if (doubled <= dx) {
+            error += dx;
+            y0 += step_y;
+        }
+    }
+}
+
 static void draw_char(char c, uint64_t x, uint64_t y,
                       uint32_t colour, uint64_t scale)
 {

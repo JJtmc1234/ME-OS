@@ -33,6 +33,11 @@ void fb_put_pixel(uint64_t x, uint64_t y, uint32_t colour);
 /* Fills an axis aligned rectangle, clipped to the framebuffer. */
 void fb_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t colour);
 
+/* Draws a one pixel line between two points, clipped to the framebuffer.
+ * Coordinates are signed because a rotating shape can put a corner off screen,
+ * and the line still has to draw the part that is on it. */
+void fb_draw_line(int64_t x0, int64_t y0, int64_t x1, int64_t y1, uint32_t colour);
+
 /* Draws `s` with each font pixel expanded to a `scale` by `scale` block.
  * Anything falling outside the framebuffer is clipped. */
 void fb_draw_string(const char *s, uint64_t x, uint64_t y,

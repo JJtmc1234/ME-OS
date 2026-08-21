@@ -31,7 +31,7 @@ references them and `--gc-sections` would otherwise discard them.
 | Module | Responsibility |
 | --- | --- |
 | `main.c` | milestone logic: what gets drawn, and the input loop |
-| `fb.c` | linear framebuffer: clear, fill a rectangle, draw a string |
+| `fb.c` | linear framebuffer: clear, fill a rectangle, draw a line, draw a string |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
 | `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift |
 | `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
@@ -41,6 +41,8 @@ references them and `--gc-sections` would otherwise discard them.
 | `rect.c` | where the moving rectangle is, given how much time has passed |
 | `calc.c` | parsing and evaluating a typed sum, conditional or assignment, with checked arithmetic |
 | `vars.c` | a fixed table of eight named whole numbers |
+| `fpu.c` | turning SSE on, and nothing else: no arithmetic lives here |
+| `geometry.c` | sine, cosine, rotation and the turning triangle. The only file with floating point in it |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -78,6 +80,22 @@ the storing, after it has checked that nothing is left over at the end. Storing
 as soon as the assignment parsed was tried first, and it meant `X=5 6` stored 5
 and then reported an error, which is the worst of both. A line that is refused
 now leaves the table exactly as it was.
+
+**Floating point is confined to one file, and the build checks it.** x86-64
+guarantees SSE2, so that is what the kernel uses; x87 and AVX are not used at
+all. The processor starts with floating point disabled, and there is no
+interrupt table to catch a fault, so an SSE instruction executing before CR0 and
+CR4 have been set would simply stop the machine. Everything is therefore
+compiled with SSE off except `geometry.c`, whose entire public interface takes
+and returns integers so that no other file can pass it a double even by mistake.
+`make` disassembles every object and refuses to link if an SSE instruction
+appears anywhere but `geometry.o`, because a rule nothing enforces is a rule
+that quietly stops being true.
+
+`fpu.c` holds the control register work and no arithmetic. `geometry.c` holds
+the arithmetic and knows nothing about control registers. The drawing is done
+in software, straight into the framebuffer: there is no graphics acceleration
+anywhere in this kernel.
 
 **Time comes from a counter, not from the loop.** The PIT's channel 0 counts
 down and wraps about every 55 milliseconds. The loop reads it, adds up the

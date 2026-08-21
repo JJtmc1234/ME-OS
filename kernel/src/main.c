@@ -22,6 +22,8 @@
 #include "calc.h"
 #include "cursor.h"
 #include "fb.h"
+#include "fpu.h"
+#include "geometry.h"
 #include "font.h"
 #include "kbd.h"
 #include "limine.h"
@@ -48,6 +50,14 @@
  * enough to watch, fast enough that a two second gap between screenshots is
  * obviously different. */
 #define M5_RECT_SPEED 60
+
+/* M12: where the triangle lives. Below everything else, and small enough that
+ * a circle of that radius fits with room to spare.
+ * tests/check_boot.py mirrors these divisors. */
+#define M12_CENTRE_X_DIVISOR 2
+#define M12_CENTRE_Y_DIVISOR 8
+#define M12_CENTRE_Y_PARTS   7
+#define M12_RADIUS_DIVISOR   12
 
 /* M4: where the cursor starts. Clear of the message, the key line and the
  * rectangle, so it never has to overlap them just by existing.
@@ -80,6 +90,9 @@ static uint32_t colour_text;
 static uint32_t colour_background;
 static uint32_t colour_rect;
 static uint64_t sum_line_y;
+static uint32_t colour_triangle;
+static struct triangle_screen triangle_drawn;
+static bool triangle_showing;
 static struct calc calc_state;
 /* M8: the variables. They sit beside the calculator rather than inside it
  * because clearing the line must not forget what has been stored. */
@@ -242,6 +255,42 @@ static char calc_char_for(const struct kbd_key *key)
     return '\0';
 }
 
+/* Draws the triangle's three edges in one colour. Used both to draw it and,
+ * with the background colour, to rub the last one out. */
+static void stroke_triangle(const struct triangle_screen *shape, uint32_t colour)
+{
+    for (int i = 0; i < TRIANGLE_VERTICES; i++) {
+        const int next = (i + 1) % TRIANGLE_VERTICES;
+        fb_draw_line(shape->x[i], shape->y[i], shape->x[next], shape->y[next], colour);
+    }
+}
+
+/* Erases where the triangle was, draws where it is now. Same cursor rule as
+ * every other drawing routine: the cursor holds a copy of the pixels
+ * underneath it, so it comes down first. */
+static void redraw_triangle(void)
+{
+    struct triangle_screen now;
+    const bool had_cursor = cursor_visible();
+
+    triangle_vertices(&now);
+
+    if (had_cursor) {
+        cursor_hide();
+    }
+    if (triangle_showing) {
+        stroke_triangle(&triangle_drawn, colour_background);
+    }
+    stroke_triangle(&now, colour_triangle);
+    if (had_cursor) {
+        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                    colour_cursor, colour_background);
+    }
+
+    triangle_drawn = now;
+    triangle_showing = true;
+}
+
 static void show_key(const struct kbd_key *key)
 {
     /* Long enough for the prefix plus the longest key name. */
@@ -303,6 +352,7 @@ void kmain(void)
     colour_text = fb_rgb(255, 255, 255);
     colour_rect = fb_rgb(60, 170, 220);
     colour_cursor = fb_rgb(255, 214, 64);
+    colour_triangle = fb_rgb(80, 220, 120);
     fb_clear(colour_background);
 
     /* M1: the message, centred, exactly as the milestone specifies. */
@@ -385,6 +435,30 @@ void kmain(void)
     timer_poll();  /* discard the interval before the clock was started */
     log_stage("timer ready, the M5 rectangle is moving");
 
+    /* M12: floating point, then a triangle that turns. The processor starts
+     * with floating point instructions disabled, so this has to happen before
+     * anything in geometry.c runs. If the processor will not do SSE the kernel
+     * carries on without a triangle rather than faulting. */
+    if (fpu_init()) {
+        const int32_t triangle_x = (int32_t)(fb_width() / M12_CENTRE_X_DIVISOR);
+        const int32_t triangle_y =
+            (int32_t)(fb_height() * M12_CENTRE_Y_PARTS / M12_CENTRE_Y_DIVISOR);
+        const int32_t triangle_r = (int32_t)(fb_height() / M12_RADIUS_DIVISOR);
+
+        triangle_init(triangle_x, triangle_y, triangle_r);
+        redraw_triangle();
+
+        log_str("me-os: floating point ready, drew the M12 triangle at ");
+        log_dec((uint64_t)triangle_x);
+        log_str(",");
+        log_dec((uint64_t)triangle_y);
+        log_str(" radius ");
+        log_dec((uint64_t)triangle_r);
+        log_str("\n");
+    } else {
+        log_stage("no SSE, running without the M12 triangle");
+    }
+
     cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
                 colour_cursor, colour_background);
     log_str("me-os: drew the M4 cursor at ");
@@ -420,8 +494,16 @@ void kmain(void)
             }
         }
 
-        if (rect_advance(&rect_state, timer_poll(), TIMER_HZ, fb_width())) {
+        /* One reading of the clock, shared by everything that moves, so the
+         * rectangle and the triangle cannot disagree about how much time has
+         * passed. */
+        const uint64_t elapsed = timer_poll();
+
+        if (rect_advance(&rect_state, elapsed, TIMER_HZ, fb_width())) {
             draw_rect();
+        }
+        if (fpu_ready() && triangle_advance(elapsed, TIMER_HZ)) {
+            redraw_triangle();
         }
 
         if (mouse_poll(&movement)) {

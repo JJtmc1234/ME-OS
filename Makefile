@@ -129,13 +129,41 @@ $(LIMINE_DIR):
 		echo "git is needed to fetch Limine ($(LIMINE_TAG))" >&2; exit 1; }
 	$(GIT) clone --depth 1 --branch $(LIMINE_TAG) $(LIMINE_REPO) $(LIMINE_DIR)
 
+# Floating point is enabled for one file and no others.
+#
+# The kernel is built with SSE off, so the compiler cannot emit a floating
+# point instruction anywhere by accident, including in code that runs before
+# the processor has been told to allow them. geometry.c is the exception,
+# because it is the only file that does arithmetic, and everything it exposes
+# takes and returns integers so nothing else needs SSE to call it.
+GEOMETRY_CFLAGS := $(filter-out -mno-sse -mno-sse2,$(CFLAGS))
+
+$(BUILD)/obj/geometry.o: kernel/src/geometry.c
+	@mkdir -p $(dir $@)
+	$(CC) $(GEOMETRY_CFLAGS) -c $< -o $@
+
 $(BUILD)/obj/%.o: kernel/src/%.c
 	@mkdir -p $(dir $@)
 	@command -v $(CC) >/dev/null 2>&1 || { \
 		echo "missing compiler: $(CC). Run make check-tools." >&2; exit 1; }
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KERNEL): $(OBJS) linker.ld
+# Floating point must stay where it was put. If the compiler starts emitting
+# SSE anywhere else, it would run before the processor has been told to allow
+# it, and the machine would fault on a instruction nobody wrote deliberately.
+.PHONY: check-fp-isolation
+check-fp-isolation: $(OBJS)
+	@for object in $(filter-out $(BUILD)/obj/geometry.o,$(OBJS)); do \
+		if objdump -d $$object | grep -qE '%xmm|movsd|mulsd|addsd'; then \
+			echo "$$object contains SSE instructions; only geometry.o may" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	objdump -d $(BUILD)/obj/geometry.o | grep -qE 'mulsd|addsd' \
+		|| { echo "geometry.o has no floating point in it at all" >&2; exit 1; }
+	@echo "floating point is confined to geometry.o"
+
+$(KERNEL): $(OBJS) linker.ld check-fp-isolation
 	@mkdir -p $(dir $@)
 	$(LD) $(OBJS) $(LDFLAGS) -o $@
 
@@ -213,14 +241,20 @@ $(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c -o $@
 
+$(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/geometry_test.c kernel/src/geometry.c -o $@ -lm
+
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
-           $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test
+           $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
+           $(BUILD)/geometry_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
 	$(BUILD)/calc_test
 	$(BUILD)/vars_test
 	$(BUILD)/kbd_test
+	$(BUILD)/geometry_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

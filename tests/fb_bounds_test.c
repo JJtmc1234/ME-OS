@@ -187,6 +187,52 @@ static void test_text_clipping(void)
     check(guards_intact() && count_pixels(colour) > 0, "scale zero is treated as one");
 }
 
+static void test_line_clipping(void)
+{
+    unsigned int colour = fb_rgb(0, 128, 255);
+
+    printf("fb_draw_line clips instead of writing out of bounds\n");
+
+    reset();
+    fb_draw_line(0, 0, WIDTH - 1, HEIGHT - 1, colour);
+    check(guards_intact() && padding_intact(), "a diagonal across the whole screen");
+    check(pixel_at(0, 0) == colour && pixel_at(WIDTH - 1, HEIGHT - 1) == colour,
+          "and it reaches both corners");
+
+    reset();
+    fb_draw_line(-500, -500, WIDTH + 500, HEIGHT + 500, colour);
+    check(guards_intact() && padding_intact(), "a line starting and ending far off screen");
+    check(count_pixels(colour) > 0, "and the part that crosses the screen is drawn");
+
+    reset();
+    fb_draw_line(-100, -100, -50, -50, colour);
+    check(guards_intact() && count_pixels(colour) == 0, "a line entirely off the top left");
+
+    reset();
+    fb_draw_line(WIDTH + 10, 0, WIDTH + 40, HEIGHT, colour);
+    check(guards_intact() && count_pixels(colour) == 0, "a line entirely off the right");
+
+    reset();
+    fb_draw_line(5, 5, 5, 5, colour);
+    check(count_pixels(colour) == 1, "a line with no length is one pixel");
+
+    reset();
+    fb_draw_line(0, HEIGHT / 2, WIDTH - 1, HEIGHT / 2, colour);
+    check(count_pixels(colour) == WIDTH, "a horizontal line is exactly as wide as the screen");
+    check(padding_intact(), "and does not run into the row padding");
+
+    reset();
+    fb_draw_line(WIDTH / 2, 0, WIDTH / 2, HEIGHT - 1, colour);
+    check(count_pixels(colour) == HEIGHT, "a vertical line is exactly as tall");
+
+    printf("a triangle drawn near the corner stays inside\n");
+    reset();
+    fb_draw_line(WIDTH - 3, HEIGHT - 3, WIDTH + 20, HEIGHT - 3, colour);
+    fb_draw_line(WIDTH + 20, HEIGHT - 3, WIDTH - 3, HEIGHT + 20, colour);
+    fb_draw_line(WIDTH - 3, HEIGHT + 20, WIDTH - 3, HEIGHT - 3, colour);
+    check(guards_intact() && padding_intact(), "guards and padding untouched");
+}
+
 static void test_colour_packing(void)
 {
     printf("fb_rgb packs to the framebuffer's own channel masks\n");
@@ -209,6 +255,7 @@ int main(void)
     test_clear_stays_inside();
     test_rect_clipping();
     test_text_clipping();
+    test_line_clipping();
     test_colour_packing();
 
     free(block);
