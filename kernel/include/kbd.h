@@ -31,6 +31,11 @@ bool kbd_shift_after(uint8_t code, bool shift);
  * milestone does not decode that key. */
 bool kbd_translate(uint8_t code, bool shift, struct kbd_key *out);
 
+/* Pure: the same for a code that followed the extended prefix. The arrow keys
+ * are the only ones decoded, because they are the only ones anything uses.
+ * They are named rather than printable, so they cannot end up in a typed sum. */
+bool kbd_translate_extended(uint8_t code, struct kbd_key *out);
+
 /* True when a key was pressed since the last call. Key releases, key repeats
  * of the extended set, and unmapped keys are discarded. */
 bool kbd_poll(struct kbd_key *out);

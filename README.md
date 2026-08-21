@@ -26,9 +26,10 @@ to a disk or a USB device.
 | M7 conditionals | One IF, taking either branch, shown on screen | Verified software milestone, QEMU |
 | M8 variables | Named values that can be stored and changed | Verified software milestone, QEMU |
 | M12 rotating triangle and floating point | SSE turned on deliberately, and a triangle turning on a timer | Verified software milestone, QEMU |
-| M9 keyboard controlled rectangle | Keys move the rectangle | Next |
+| M9 keyboard controlled rectangle | The arrow keys steer the rectangle | Verified software milestone, QEMU |
+| M10 edge wrapping | The rectangle wraps rather than stopping | Next |
 
-All nine finished milestones are checked automatically. `make test` boots the image
+All ten finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -83,6 +84,15 @@ worked out, so a branch that overflows makes the whole line an error even when
 it is not the one taken. Enter is the only key that evaluates, because `=` is
 something someone might want to type: at M7 as a comparison, and at M8 as an
 assignment.
+
+**M9.** The arrow keys move the rectangle, sixteen pixels a press. The first
+press stops it drifting, because steering something that is also wandering off
+on its own is a nuisance. It moves within a corridor between the key line and
+the triangle, so it cannot rub out text or part of the turning shape, and it
+stops at the edges rather than wrapping. Wrapping is M10.
+
+Arrows rather than WASD: since M8 every letter is part of a typed sum, so
+letters would steer and type at the same time.
 
 **M12.** A triangle turns about its own centre, below everything else on the
 screen, at a fixed speed driven by the same clock the rectangle uses. It is

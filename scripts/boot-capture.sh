@@ -52,6 +52,12 @@ FALSE_KEYS="${FALSE_KEYS:-i f spc 2 shift-dot 3 spc t h e n spc 1 0 spc e l s e 
 SHOT_ASSIGN="${SHOT_ASSIGN:-build/screen-assign.ppm}"
 SHOT_VAR="${SHOT_VAR:-build/screen-var.ppm}"
 SHOT_VARIF="${SHOT_VARIF:-build/screen-varif.ppm}"
+SHOT_STEER_DOWN="${SHOT_STEER_DOWN:-build/screen-steer-down.ppm}"
+SHOT_STEER_LEFT="${SHOT_STEER_LEFT:-build/screen-steer-left.ppm}"
+# M9. Three presses down and eight left, so the checker can look for exactly
+# three and exactly eight steps rather than just "it moved".
+STEER_DOWN_KEYS="${STEER_DOWN_KEYS:-down down down}"
+STEER_LEFT_KEYS="${STEER_LEFT_KEYS:-left left left left left left left left}"
 ASSIGN_KEYS="${ASSIGN_KEYS:-x equal 5 ret}"
 VAR_KEYS="${VAR_KEYS:-x kp_add 3 ret}"
 VARIF_KEYS="${VARIF_KEYS:-i f spc x shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
@@ -92,6 +98,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_ASSIGN"
 : > "$SHOT_VAR"
 : > "$SHOT_VARIF"
+: > "$SHOT_STEER_DOWN"
+: > "$SHOT_STEER_LEFT"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -170,6 +178,20 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_VARIF"
     sleep 2
+    for key in $STEER_DOWN_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_STEER_DOWN"
+    sleep 2
+    for key in $STEER_LEFT_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_STEER_LEFT"
+    sleep 2
     echo "quit"
 } | "$QEMU" \
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
@@ -191,6 +213,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_ASSIGN" ] || fail "QEMU produced no screenshot at $SHOT_ASSIGN"
 [ -s "$SHOT_VAR" ] || fail "QEMU produced no screenshot at $SHOT_VAR"
 [ -s "$SHOT_VARIF" ] || fail "QEMU produced no screenshot at $SHOT_VARIF"
+[ -s "$SHOT_STEER_DOWN" ] || fail "QEMU produced no screenshot at $SHOT_STEER_DOWN"
+[ -s "$SHOT_STEER_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_STEER_LEFT"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
@@ -201,3 +225,4 @@ if [ -s "$DEBUG_LOG" ]; then
     echo "boot-capture: kernel log"
     sed 's/^/    /' "$DEBUG_LOG"
 fi
+echo "boot-capture: steered the rectangle with $STEER_DOWN_KEYS then $STEER_LEFT_KEYS"

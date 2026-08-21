@@ -25,8 +25,8 @@ Nothing here has been booted on a physical machine yet.
 | M6 | Basic arithmetic | Evaluates whole number arithmetic typed on the keyboard and shows the result | Verified software milestone |
 | M7 | Conditionals | One conditional expression, IF a compared to b THEN x ELSE y, taking either branch | Verified software milestone |
 | M8 | Variables | Stores and updates named values, and shows them changing | Verified software milestone |
-| M9 | Keyboard controlled rectangle | Arrow or letter keys move the rectangle | Next |
-| M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Planned |
+| M9 | Keyboard controlled rectangle | The arrow keys move the rectangle, which stops drifting once it is being steered | Verified software milestone |
+| M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Next |
 | M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Planned |
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
 
@@ -37,6 +37,29 @@ worse than taking them out of order. M9 is still the next one to build.
 After M11, simple game like milestones come next, exercising input, timing and
 drawing together, before any deeper operating system work such as memory
 management, interrupts, processes or filesystems.
+
+## What M9 added
+
+The arrow keys move the rectangle sixteen pixels at a time.
+
+Arrows rather than letters, because since M8 every letter is part of a typed
+sum: WASD would steer the rectangle and type into the calculator at the same
+time. Arrows arrive with an extended prefix, which the keyboard decoder used to
+throw away, so it now decodes those four and still discards the rest of that
+set. They are named keys rather than printable ones, so they cannot end up in a
+sum by another route.
+
+The first arrow press also stops the rectangle drifting. Steering something
+that is wandering off on its own is a nuisance, and it makes the movement exact
+rather than approximate, which is what lets the test measure it in whole steps.
+
+Vertically it is held in a corridor between the key line and the triangle.
+Nothing else lives in that band, so steering cannot rub out text or part of the
+shape that turns. Widening it would need something that can repaint whatever
+was underneath, and no milestone has asked for that.
+
+Wrapping at the edges is M10, and picking the rectangle up with the pointer is
+M11. Neither is here.
 
 ## What M12 added
 
@@ -79,7 +102,7 @@ have actually moved.
 
 ## Verification status
 
-M1 to M8 and M12 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M9 and M12 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

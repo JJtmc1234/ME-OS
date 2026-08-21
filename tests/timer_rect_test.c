@@ -140,11 +140,81 @@ static void test_rect_stays_on_screen(void)
     check(exact.x == 0, "exactly as wide as the screen has nowhere to go");
 }
 
+static void test_rect_nudge(void)
+{
+    const int64_t min_y = 500, max_y = 569;
+    struct moving_rect r;
+
+    printf("rect_nudge moves the rectangle by hand\n");
+    r = make_rect(400, 1);
+    r.y = 520;
+    check(rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y) && r.x == 416, "right");
+    check(rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y) && r.x == 400, "left");
+    check(rect_nudge(&r, 0, -16, SCREEN_W, min_y, max_y) && r.y == 504, "up");
+    check(rect_nudge(&r, 0, 16, SCREEN_W, min_y, max_y) && r.y == 520, "down");
+    check(!rect_nudge(&r, 0, 0, SCREEN_W, min_y, max_y), "nowhere is not a move");
+
+    printf("repeated presses keep moving it\n");
+    r = make_rect(400, 1);
+    r.y = 520;
+    for (int i = 0; i < 10; i++) {
+        rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y);
+    }
+    check(r.x == 400 - 160, "ten presses move it ten steps");
+
+    printf("it stops at the edges rather than leaving\n");
+    r = make_rect(10, 1);
+    r.y = 520;
+    for (int i = 0; i < 20; i++) {
+        rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y);
+    }
+    check(r.x == 0, "pushed left it stops at the left edge");
+    check(!rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y), "and pushing further does nothing");
+
+    r = make_rect(SCREEN_W - 320 - 10, 1);
+    r.y = 520;
+    for (int i = 0; i < 20; i++) {
+        rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y);
+    }
+    check(r.x == SCREEN_W - 320, "pushed right it stops with its edge on the screen");
+
+    printf("it stays inside the corridor it was given\n");
+    r = make_rect(400, 1);
+    r.y = 520;
+    for (int i = 0; i < 20; i++) {
+        rect_nudge(&r, 0, -16, SCREEN_W, min_y, max_y);
+    }
+    check(r.y == min_y, "pushed up it stops at the top of the corridor");
+    for (int i = 0; i < 40; i++) {
+        rect_nudge(&r, 0, 16, SCREEN_W, min_y, max_y);
+    }
+    check(r.y == max_y, "pushed down it stops at the bottom");
+
+    printf("a corridor with no room, and other nonsense\n");
+    r = make_rect(400, 1);
+    r.y = 520;
+    check(!rect_nudge(NULL, 16, 0, SCREEN_W, min_y, max_y), "no rectangle");
+    struct moving_rect huge = make_rect(0, 1);
+    huge.width = SCREEN_W + 100;
+    check(!rect_nudge(&huge, 16, 0, SCREEN_W, min_y, max_y), "wider than the screen");
+    r.y = 520;
+    rect_nudge(&r, 0, -16, SCREEN_W, 600, 500);   /* upside down corridor */
+    check(r.y == 600, "a corridor with its ends the wrong way round still lands inside it");
+
+    printf("steering and drifting do not fight\n");
+    r = make_rect(400, 1);
+    r.y = 520;
+    r.speed = 0;                                   /* what the kernel does on the first arrow */
+    check(!rect_advance(&r, TIMER_HZ, TIMER_HZ, SCREEN_W), "a stopped rectangle does not drift");
+    check(rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y), "but can still be steered");
+}
+
 int main(void)
 {
     test_timer_wrap();
     test_rect_movement();
     test_rect_stays_on_screen();
+    test_rect_nudge();
 
     if (failures > 0) {
         printf("\n%d timer or rectangle check(s) FAILED\n", failures);

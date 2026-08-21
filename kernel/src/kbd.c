@@ -99,6 +99,26 @@ bool kbd_translate(uint8_t code, bool shift, struct kbd_key *out)
     return false;
 }
 
+bool kbd_translate_extended(uint8_t code, struct kbd_key *out)
+{
+    if (out == NULL || (code & SCANCODE_RELEASE) != 0) {
+        return false;
+    }
+
+    const char *name;
+    switch (code) {
+    case 0x48: name = "UP";    break;
+    case 0x50: name = "DOWN";  break;
+    case 0x4B: name = "LEFT";  break;
+    case 0x4D: name = "RIGHT"; break;
+    default:   return false;
+    }
+
+    out->ch = '\0';
+    out->name = name;
+    return true;
+}
+
 static bool byte_waiting(void)
 {
     uint8_t status = inb(PS2_STATUS);
@@ -130,11 +150,11 @@ bool kbd_poll(struct kbd_key *out)
         extended = true;
         return false;
     }
-    /* Arrow keys and friends arrive with the extended prefix. Nothing so far
-     * has anything to do with them, so the code after the prefix is dropped. */
+    /* The byte after the prefix is the real key. The arrows are decoded and
+     * everything else in the extended set is dropped. */
     if (extended) {
         extended = false;
-        return false;
+        return kbd_translate_extended(code, out);
     }
 
     /* Shift has to be seen going down and coming back up, so this happens

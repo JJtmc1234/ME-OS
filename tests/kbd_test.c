@@ -106,6 +106,41 @@ static void test_arithmetic_keys(void)
     check(gives(0x4E, true, '+'), "keypad plus is the same with shift held");
 }
 
+static int extended_names(uint8_t code, const char *expected)
+{
+    struct kbd_key key;
+    memset(&key, 0, sizeof key);
+    if (!kbd_translate_extended(code, &key)) {
+        return 0;
+    }
+    return key.ch == '\0' && key.name != NULL && strcmp(key.name, expected) == 0;
+}
+
+static void test_arrow_keys(void)
+{
+    printf("the arrows, which arrive after the extended prefix\n");
+    check(extended_names(0x48, "UP"), "up");
+    check(extended_names(0x50, "DOWN"), "down");
+    check(extended_names(0x4B, "LEFT"), "left");
+    check(extended_names(0x4D, "RIGHT"), "right");
+
+    printf("arrows are named, never printable, so they cannot land in a sum\n");
+    struct kbd_key key;
+    memset(&key, 0, sizeof key);
+    kbd_translate_extended(0x48, &key);
+    check(key.ch == '\0', "up has no character");
+
+    printf("and the rest of the extended set is still dropped\n");
+    check(!extended_names(0x1C, "ENTER"), "the extended enter on the keypad");
+    check(!extended_names(0x47, "HOME"), "home");
+    check(!extended_names(0x53, "DELETE"), "delete");
+    check(!kbd_translate_extended(0xC8, &key), "an arrow being released");
+    check(!kbd_translate_extended(0x48, NULL), "nowhere to put the answer");
+
+    printf("the same codes without the prefix are their ordinary keys\n");
+    check(gives(0x4B, false, '\0') == 0, "0x4B unprefixed is not a left arrow");
+}
+
 static void test_refusals(void)
 {
     printf("kbd_translate refuses what it should\n");
@@ -125,6 +160,7 @@ int main(void)
     test_shift_state();
     test_unshifted_keys();
     test_arithmetic_keys();
+    test_arrow_keys();
     test_refusals();
 
     if (failures > 0) {

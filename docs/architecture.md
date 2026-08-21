@@ -33,7 +33,7 @@ references them and `--gc-sections` would otherwise discard them.
 | `main.c` | milestone logic: what gets drawn, and the input loop |
 | `fb.c` | linear framebuffer: clear, fill a rectangle, draw a line, draw a string |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
-| `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift |
+| `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift and the arrow keys |
 | `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
 | `pointer.c` | where the pointer is, and clamping it to the screen |
 | `cursor.c` | drawing the cursor, and putting back what it covered |

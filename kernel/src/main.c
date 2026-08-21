@@ -11,6 +11,8 @@
  *     still without disturbing any of them.
  * M7: work out one conditional, IF a > b THEN x ELSE y, on the same line.
  * M8: remember values under names, and use them in sums and conditionals.
+ * M12: turn a triangle about its own centre, using floating point.
+ * M9: steer the rectangle with the arrow keys.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -50,6 +52,13 @@
  * enough to watch, fast enough that a two second gap between screenshots is
  * obviously different. */
 #define M5_RECT_SPEED 60
+
+/* M9: how far one arrow key press moves the rectangle, and how much room to
+ * leave between it and the things it must not paint over. Arrows were chosen
+ * rather than letters because since M8 every letter is part of a typed sum, so
+ * WASD would steer the rectangle and type into the calculator at the same time. */
+#define M9_STEP 16
+#define M9_CLEARANCE 8
 
 /* M12: where the triangle lives. Below everything else, and small enough that
  * a circle of that radius fits with room to spare.
@@ -93,6 +102,9 @@ static uint64_t sum_line_y;
 static uint32_t colour_triangle;
 static struct triangle_screen triangle_drawn;
 static bool triangle_showing;
+static struct moving_rect rect_drawn;
+static bool rect_showing;
+static int64_t rect_min_y, rect_max_y;
 static struct calc calc_state;
 /* M8: the variables. They sit beside the calculator rather than inside it
  * because clearing the line must not forget what has been stored. */
@@ -189,10 +201,16 @@ static void draw_rect(void)
         cursor_hide();
     }
 
-    fb_fill_rect(0, (uint64_t)rect_state.y, fb_width(), rect_state.height,
-                 colour_background);
+    /* Erase exactly where it was, not the whole row. Since M9 it can move up
+     * and down as well, so the old place is not always on the same line. */
+    if (rect_showing) {
+        fb_fill_rect((uint64_t)rect_drawn.x, (uint64_t)rect_drawn.y,
+                     rect_drawn.width, rect_drawn.height, colour_background);
+    }
     fb_fill_rect((uint64_t)rect_state.x, (uint64_t)rect_state.y,
                  rect_state.width, rect_state.height, colour_rect);
+    rect_drawn = rect_state;
+    rect_showing = true;
 
     if (had_cursor) {
         cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
@@ -392,7 +410,25 @@ void kmain(void)
     rect_state.direction = 1;
     rect_state.carried = 0;
 
-    fb_fill_rect(rect_x, rect_y, rect_w, rect_h, colour_rect);
+    /* M9: the corridor the arrow keys may move it within. It starts below the
+     * key line and stops above the triangle, so steering it cannot rub out any
+     * text or any part of the shape that turns. Nothing else lives in between.
+     * A wider range would need something that can repaint what was underneath,
+     * which no milestone has asked for yet. */
+    rect_min_y = (int64_t)(key_line_y + FONT_HEIGHT * key_line_scale + M9_CLEARANCE);
+    rect_max_y = (int64_t)(fb_height() * M12_CENTRE_Y_PARTS / M12_CENTRE_Y_DIVISOR)
+               - (int64_t)(fb_height() / M12_RADIUS_DIVISOR)
+               - (int64_t)rect_h - M9_CLEARANCE;
+    if (rect_max_y < rect_min_y) {
+        rect_max_y = rect_min_y;
+    }
+
+    draw_rect();
+    log_str("me-os: rectangle may be steered between y ");
+    log_dec((uint64_t)rect_min_y);
+    log_str(" and ");
+    log_dec((uint64_t)rect_max_y);
+    log_str("\n");
     log_str("me-os: drew the M3 rectangle ");
     log_dec(rect_w);
     log_str("x");
@@ -473,6 +509,36 @@ void kmain(void)
 
         if (kbd_poll(&key)) {
             show_key(&key);
+
+            /* M9: the arrows move the rectangle. The first press also stops it
+             * drifting: once someone is steering it, having it wander off on
+             * its own as well would be a nuisance rather than a feature. */
+            int64_t dx = 0, dy = 0;
+            if (key.ch == '\0' && key.name != NULL) {
+                if (same_name(key.name, "LEFT")) {
+                    dx = -M9_STEP;
+                } else if (same_name(key.name, "RIGHT")) {
+                    dx = M9_STEP;
+                } else if (same_name(key.name, "UP")) {
+                    dy = -M9_STEP;
+                } else if (same_name(key.name, "DOWN")) {
+                    dy = M9_STEP;
+                }
+            }
+            if (dx != 0 || dy != 0) {
+                if (rect_state.speed != 0) {
+                    rect_state.speed = 0;
+                    log_stage("the rectangle is being steered, so it stopped drifting");
+                }
+                if (rect_nudge(&rect_state, dx, dy, fb_width(), rect_min_y, rect_max_y)) {
+                    draw_rect();
+                    log_str("me-os: rectangle moved to ");
+                    log_dec((uint64_t)rect_state.x);
+                    log_str(",");
+                    log_dec((uint64_t)rect_state.y);
+                    log_str("\n");
+                }
+            }
 
             const char typed = calc_char_for(&key);
             if (typed != '\0' && calc_key(&calc_state, typed)) {

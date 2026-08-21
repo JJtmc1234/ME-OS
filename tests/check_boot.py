@@ -16,6 +16,8 @@ milestones:
       branches and showing different answers
   M8  a value stored under a name, then used in a sum and in a conditional on
       later lines, which only works if it was really remembered
+  M9  the rectangle steered with the arrow keys, moving exactly as far as the
+      presses say and stopping inside the corridor it is allowed
   M12 a triangle turning about its own centre, drawn with floating point:
       present in every capture, whole, on screen, and in a different position
       each time
@@ -43,6 +45,8 @@ SCREEN_FALSE = ROOT / "build" / "screen-false.ppm"
 SCREEN_ASSIGN = ROOT / "build" / "screen-assign.ppm"
 SCREEN_VAR = ROOT / "build" / "screen-var.ppm"
 SCREEN_VARIF = ROOT / "build" / "screen-varif.ppm"
+SCREEN_STEER_DOWN = ROOT / "build" / "screen-steer-down.ppm"
+SCREEN_STEER_LEFT = ROOT / "build" / "screen-steer-left.ppm"
 DEBUG_LOG = ROOT / "build" / "debug.log"
 SERIAL_LOG = ROOT / "build" / "serial.log"
 
@@ -64,6 +68,9 @@ M7_FALSE = "IF 2>3 THEN 10 ELSE 20=20"
 M8_ASSIGN = "X=5=5"
 M8_VAR = "X+3=8"
 M8_VARIF = "IF X>2 THEN 10 ELSE 20=10"
+# M9. The key line reports the last key, so after an arrow it names that arrow.
+M2_AFTER_ARROW_DOWN = "LAST KEY DOWN"
+M2_AFTER_ARROW_LEFT = "LAST KEY LEFT"
 M6_AFTER_ENTER = "LAST KEY ENTER"
 # Every letter types since M8, so the key injected to prove M2 lands on the sum
 # line as well as on the key line, and stays there until escape clears it.
@@ -88,6 +95,13 @@ TRIANGLE_RADIUS_ALLOWANCE = 8
 # Every triangle seen, in capture order. Filled in by check_screen so the run
 # can compare one capture against the next without every caller carrying it.
 TRIANGLES: list[tuple[str, tuple[float, float], frozenset]] = []
+
+# M9. Where the rectangle was in each capture, in order, so movement can be
+# measured from one to the next. Mirrors M9_STEP in kernel/src/main.c.
+RECTANGLES: list[tuple[str, int, int]] = []
+STEER_STEP = 16
+STEER_DOWN_PRESSES = 3
+STEER_LEFT_PRESSES = 8
 CURSOR_START_X_DIVISOR = 4
 CURSOR_START_Y_DIVISOR = 6
 # Must match scripts/boot-capture.sh.
@@ -392,6 +406,7 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
     TRIANGLES.append((path.name, triangle_centre, triangle_pixels))
 
     rect_left = min(x for x, _ in rect)
+    RECTANGLES.append((path.name, rect_left, min(y for _, y in rect)))
     return notes, (left, top, pixels), (width, height), rect_left, sum_line.ink
 
 
@@ -406,6 +421,8 @@ def check_log() -> list[str]:
         "timer ready",
         "drew the M4 cursor",
         "drew the M6 sum line",
+        "the rectangle is being steered",
+        "rectangle moved to",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -490,6 +507,44 @@ def check_rectangle_movement(positions, size) -> list[str]:
         raise CheckFailed(f"the rectangle left the screen: {positions}")
     travelled = max(positions) - min(positions)
     return [f"  M5 rectangle moved across {travelled} pixels: {positions}"]
+
+
+def check_steering() -> list[str]:
+    """M9: the arrow keys move the rectangle, by exactly as much as was pressed.
+
+    The last three captures are the one before any arrow was pressed, the one
+    after three presses of down, and the one after eight of left. Because the
+    first arrow press also stops the rectangle drifting, the only thing that can
+    move it afterwards is another press, so the distances are exact rather than
+    approximate.
+    """
+    if len(RECTANGLES) < 3:
+        raise CheckFailed("not enough captures to tell whether steering works")
+
+    before, down, left = RECTANGLES[-3], RECTANGLES[-2], RECTANGLES[-1]
+
+    fell = down[2] - before[2]
+    if fell != STEER_STEP * STEER_DOWN_PRESSES:
+        raise CheckFailed(
+            f"{STEER_DOWN_PRESSES} presses of down moved the rectangle {fell} pixels, "
+            f"expected {STEER_STEP * STEER_DOWN_PRESSES}")
+
+    moved = left[1] - down[1]
+    if moved != -STEER_STEP * STEER_LEFT_PRESSES:
+        raise CheckFailed(
+            f"{STEER_LEFT_PRESSES} presses of left moved the rectangle {moved} pixels, "
+            f"expected {-STEER_STEP * STEER_LEFT_PRESSES}")
+
+    if left[2] != down[2]:
+        raise CheckFailed(
+            f"pressing left changed the rectangle's height on screen, from {down[2]} "
+            f"to {left[2]}; it should only have moved sideways")
+
+    return [
+        f"  M9 rectangle steered: down {STEER_DOWN_PRESSES} presses moved it {fell} "
+        f"pixels, left {STEER_LEFT_PRESSES} presses moved it {-moved}, and nothing "
+        f"else moved it once it was being steered",
+    ]
 
 
 def check_rotation() -> list[str]:
@@ -610,6 +665,13 @@ def main() -> int:
         notes += check_rectangle_movement(
             [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power,
              rect_true, rect_false, rect_assign, rect_var, rect_varif], size)
+        steer_down_notes, _, _, rect_steer_down, _ = check_screen(
+            SCREEN_STEER_DOWN, M2_AFTER_ARROW_DOWN, M8_VARIF)
+        steer_left_notes, _, _, rect_steer_left, _ = check_screen(
+            SCREEN_STEER_LEFT, M2_AFTER_ARROW_LEFT, M8_VARIF)
+        notes += steer_down_notes + steer_left_notes
+
+        notes += check_steering()
         notes += check_rotation()
         notes += check_log()
     except CheckFailed as exc:
@@ -618,10 +680,10 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M8 and M12 checks passed: message, key press, a moving rectangle, "
-          "a cursor that follows the mouse, sums answered, a conditional taking each "
-          "branch in turn, a value remembered under a name and used again, and a "
-          "triangle turning about its own centre")
+    print("M1 to M9 and M12 checks passed: message, key press, a rectangle that "
+          "drifts and can then be steered, a cursor that follows the mouse, sums "
+          "answered, a conditional taking each branch in turn, a value remembered "
+          "under a name and used again, and a triangle turning about its own centre")
     print("A person should still watch it boot once with make run.")
     return 0
 
