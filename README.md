@@ -21,9 +21,10 @@ to a disk or a USB device.
 | M2 keyboard input | A key press reaches the kernel and changes the screen | Verified software milestone, QEMU |
 | M3 draw rectangle | A filled rectangle, with M1 and M2 untouched | Verified software milestone, QEMU |
 | M4 mouse cursor | A cursor that follows a mouse and stays on screen | Verified software milestone, QEMU |
-| M5 move rectangle | The rectangle moves over time | Next |
+| M5 move rectangle | The rectangle crosses the screen over time | Verified software milestone, QEMU |
+| M6 basic arithmetic | Adds and subtracts, and shows the result | Next |
 
-All four milestones are checked automatically. `make test` boots the image
+All five milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding and pointer clamping on the development machine, without an emulator. See
@@ -48,7 +49,13 @@ lines of text unchanged. It is static: nothing moves it.
 
 **M4.** A cursor is drawn, and moving the mouse moves it. It stays inside the
 screen, keeps its shape, and puts back whatever it covered when it moves on.
-Nothing follows it, nothing can be dragged, and the rectangle does not move.
+Nothing follows it and nothing can be dragged.
+
+**M5.** The rectangle crosses the screen at sixty pixels a second, turning
+around at each edge. It moves at a rate rather than at whatever speed this
+machine runs the loop, because the movement is driven by a clock. Nothing
+controls it yet: keys move the rectangle at M9, and it wraps around the edges
+instead of turning around at M10.
 
 ## Build and run
 
@@ -96,7 +103,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
-                  logging, memory
+                  timer, rectangle, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)
 scripts/          headless boot capture for testing

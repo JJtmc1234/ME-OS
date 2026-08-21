@@ -10,6 +10,7 @@ milestones:
   M3  one solid rectangle, in its own colour, at the expected size and place
   M4  a cursor that starts where it should, moves when the mouse moves, keeps
       its shape, and stops at the edge of the screen instead of leaving it
+  M5  the rectangle crossing the screen over time, staying whole and on screen
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -214,13 +215,16 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
             f"{name}: the rectangle is {actual_w}x{actual_h}, expected "
             f"{expected_w}x{expected_h}"
         )
-    if abs((left + right) / 2 - width / 2) > 1:
-        raise CheckFailed(f"{name}: the rectangle is not horizontally centred")
+    # No centring check: since M5 the rectangle moves, so where it is depends
+    # on when the screen was captured. That it moves is checked across
+    # captures, in check_rectangle_movement.
+    if left < 0 or right >= width:
+        raise CheckFailed(f"{name}: the rectangle is not fully on screen")
     if top <= key_line.bottom:
         raise CheckFailed(f"{name}: the rectangle overlaps or sits above the key line")
     if right >= width or bottom >= height:
         raise CheckFailed(f"{name}: the rectangle runs off the screen")
-    return f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and centred"
+    return f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and on screen"
 
 
 def cursor_corner(cursor: set[tuple[int, int]], name: str) -> tuple[int, int, int]:
@@ -260,7 +264,9 @@ def check_screen(path: Path, key_line_text: str):
     if left >= width or top >= height:
         raise CheckFailed(f"{path.name}: the cursor is outside the screen")
     notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
-    return notes, (left, top, pixels), (width, height)
+
+    rect_left = min(x for x, _ in rect)
+    return notes, (left, top, pixels), (width, height), rect_left
 
 
 def check_log() -> list[str]:
@@ -271,6 +277,7 @@ def check_log() -> list[str]:
         "drew the M3 rectangle",
         "keyboard ready",
         "mouse ready",
+        "timer ready",
         "drew the M4 cursor",
         f"key {KEY_SENT}",
     )
@@ -327,18 +334,34 @@ def check_cursor_movement(start, moved, clamped, size) -> list[str]:
     ]
 
 
+def check_rectangle_movement(positions, size) -> list[str]:
+    """M5: the rectangle crosses the screen, and never leaves it."""
+    width, _ = size
+    if len(set(positions)) == 1:
+        raise CheckFailed(
+            f"the rectangle sat at x={positions[0]} in every capture; it should be moving"
+        )
+    limit = width - width // RECT_WIDTH_DIVISOR
+    if any(x < 0 or x > limit for x in positions):
+        raise CheckFailed(f"the rectangle left the screen: {positions}")
+    travelled = max(positions) - min(positions)
+    return [f"  M5 rectangle moved across {travelled} pixels: {positions}"]
+
+
 def main() -> int:
     try:
-        notes, boot_cursor, size = check_screen(SCREEN_BOOT, M2_PROMPT)
-        key_notes, key_cursor, _ = check_screen(SCREEN_KEY, M2_AFTER_KEY)
-        mouse_notes, moved_cursor, _ = check_screen(SCREEN_MOUSE, M2_AFTER_KEY)
-        clamp_notes, clamped_cursor, _ = check_screen(SCREEN_CLAMP, M2_AFTER_KEY)
+        notes, boot_cursor, size, rect_boot = check_screen(SCREEN_BOOT, M2_PROMPT)
+        key_notes, key_cursor, _, rect_key = check_screen(SCREEN_KEY, M2_AFTER_KEY)
+        mouse_notes, moved_cursor, _, rect_mouse = check_screen(SCREEN_MOUSE, M2_AFTER_KEY)
+        clamp_notes, clamped_cursor, _, rect_clamp = check_screen(SCREEN_CLAMP, M2_AFTER_KEY)
         notes += key_notes + mouse_notes + clamp_notes
 
         if key_cursor[:2] != boot_cursor[:2]:
             raise CheckFailed("the cursor moved on its own before the mouse was touched")
 
         notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
+        notes += check_rectangle_movement(
+            [rect_boot, rect_key, rect_mouse, rect_clamp], size)
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -346,8 +369,8 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M4 checks passed: message, key press, rectangle, and a cursor that "
-          "follows the mouse")
+    print("M1 to M5 checks passed: message, key press, a rectangle that moves, and a "
+          "cursor that follows the mouse")
     print("A person should still watch it boot once with make run.")
     return 0
 

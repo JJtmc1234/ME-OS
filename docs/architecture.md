@@ -37,6 +37,8 @@ references them and `--gc-sections` would otherwise discard them.
 | `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
 | `pointer.c` | where the pointer is, and clamping it to the screen |
 | `cursor.c` | drawing the cursor, and putting back what it covered |
+| `timer.c` | elapsed time, polled from the programmable interval timer |
+| `rect.c` | where the moving rectangle is, given how much time has passed |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -58,6 +60,15 @@ packets, `pointer.c` holds the position and clamps it, `cursor.c` draws it.
 A second input device would touch only the first of those, and a different
 cursor only the last. Decoding and clamping are pure functions, which is why
 both can be tested on an ordinary machine.
+
+**Time comes from a counter, not from the loop.** The PIT's channel 0 counts
+down and wraps about every 55 milliseconds. The loop reads it, adds up the
+differences, and hands the total to `rect_advance`, so the rectangle moves at
+sixty pixels a second on a fast machine and on a slow one. The wrap arithmetic
+is a pure function, because getting it wrong makes time jump backwards once per
+wrap, which is exactly the kind of fault that hides in a short look at an
+emulator. The leftover time between whole pixels is carried, so a thousand small
+steps land where one large step would.
 
 **The cursor saves what it covers.** There is no second buffer to draw into, so
 the cursor keeps a copy of the pixels underneath and puts them back before it

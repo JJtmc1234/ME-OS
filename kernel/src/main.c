@@ -5,6 +5,8 @@
  *     the M1 message.
  * M3: draw one static rectangle, without disturbing either.
  * M4: show a mouse cursor that moves, without disturbing any of them.
+ * M5: move the rectangle across the screen over time, still without
+ *     disturbing any of them.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -21,6 +23,8 @@
 #include "log.h"
 #include "mouse.h"
 #include "pointer.h"
+#include "rect.h"
+#include "timer.h"
 
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
@@ -31,6 +35,11 @@
  * numbers, so change them in both places or the check will fail. */
 #define M3_RECT_WIDTH_DIVISOR  4
 #define M3_RECT_HEIGHT_DIVISOR 14
+
+/* M5: how fast the rectangle crosses the screen, in pixels per second. Slow
+ * enough to watch, fast enough that a two second gap between screenshots is
+ * obviously different. */
+#define M5_RECT_SPEED 60
 
 /* M4: where the cursor starts. Clear of the message, the key line and the
  * rectangle, so it never has to overlap them just by existing.
@@ -64,6 +73,7 @@ static uint32_t colour_background;
 static uint32_t colour_rect;
 static uint32_t colour_cursor;
 static struct pointer pointer_state;
+static struct moving_rect rect_state;
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -135,6 +145,28 @@ static void draw_key_line(const char *text)
     fb_fill_rect(0, key_line_y, fb_width(), height, colour_background);
     fb_draw_string(text, centred_x(str_len(text), key_line_scale),
                    key_line_y, colour_text, key_line_scale);
+
+    if (had_cursor) {
+        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
+                    colour_cursor, colour_background);
+    }
+}
+
+/* Erases the rectangle's old row and draws it at its current position. Only
+ * the strip the rectangle lives in is touched, and it sits below every line of
+ * text, so nothing else has to be redrawn. */
+static void draw_rect(void)
+{
+    const bool had_cursor = cursor_visible();
+
+    if (had_cursor) {
+        cursor_hide();
+    }
+
+    fb_fill_rect(0, (uint64_t)rect_state.y, fb_width(), rect_state.height,
+                 colour_background);
+    fb_fill_rect((uint64_t)rect_state.x, (uint64_t)rect_state.y,
+                 rect_state.width, rect_state.height, colour_rect);
 
     if (had_cursor) {
         cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
@@ -234,6 +266,14 @@ void kmain(void)
         rect_y = y > rect_h * 2 ? y - rect_h * 2 : 0;
     }
 
+    rect_state.x = (int64_t)rect_x;
+    rect_state.y = (int64_t)rect_y;
+    rect_state.width = rect_w;
+    rect_state.height = rect_h;
+    rect_state.speed = M5_RECT_SPEED;
+    rect_state.direction = 1;
+    rect_state.carried = 0;
+
     fb_fill_rect(rect_x, rect_y, rect_w, rect_h, colour_rect);
     log_str("me-os: drew the M3 rectangle ");
     log_dec(rect_w);
@@ -262,6 +302,12 @@ void kmain(void)
         log_stage("no mouse answered, the cursor will not move");
     }
 
+    /* M5: a clock, so the rectangle moves at a rate rather than at whatever
+     * speed this machine happens to run the loop. */
+    timer_init();
+    timer_poll();  /* discard the interval before the clock was started */
+    log_stage("timer ready, the M5 rectangle is moving");
+
     cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
                 colour_cursor, colour_background);
     log_str("me-os: drew the M4 cursor at ");
@@ -276,6 +322,10 @@ void kmain(void)
 
         if (kbd_poll(&key)) {
             show_key(&key);
+        }
+
+        if (rect_advance(&rect_state, timer_poll(), TIMER_HZ, fb_width())) {
+            draw_rect();
         }
 
         if (mouse_poll(&movement)) {

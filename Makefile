@@ -195,9 +195,15 @@ $(BUILD)/pointer_test: tests/pointer_test.c kernel/src/mouse.c kernel/src/pointe
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c -o $@
 
-test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test
+$(BUILD)/timer_rect_test: tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) \
+		tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c -o $@
+
+test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
+	$(BUILD)/timer_rect_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
