@@ -135,6 +135,47 @@ static void test_overflow(void)
           "recovering from the most negative value");
 }
 
+static void test_conditionals(void)
+{
+    printf("IF picks one of two answers\n");
+    check(evaluates("IF 3>2 THEN 10 ELSE 20", 10), "a condition that holds");
+    check(evaluates("IF 2>3 THEN 10 ELSE 20", 20), "a condition that does not");
+    check(evaluates("IF 2<3 THEN 10 ELSE 20", 10), "less than");
+    check(evaluates("IF 3<2 THEN 10 ELSE 20", 20), "less than, the other way");
+    check(evaluates("IF 5=5 THEN 1 ELSE 0", 1), "equality with one equals sign");
+    check(evaluates("IF 5==5 THEN 1 ELSE 0", 1), "equality with two, which reads better");
+    check(evaluates("IF 5==6 THEN 1 ELSE 0", 0), "values that are not equal");
+
+    printf("spacing is not fussy\n");
+    check(evaluates("IF 3 > 2 THEN 10 ELSE 20", 10), "spaces around the comparison");
+    check(evaluates("IF   3>2   THEN 10 ELSE 20", 10), "several spaces");
+
+    printf("either side, and either branch, can be a sum\n");
+    check(evaluates("IF 2+2>3 THEN 10 ELSE 20", 10), "a sum in the condition");
+    check(evaluates("IF 1>2 THEN 10 ELSE 4*5", 20), "a sum in the branch taken");
+    check(evaluates("IF 2^3=8 THEN 6*7 ELSE 0", 42), "a power in the condition");
+    check(evaluates("IF 0-1<0 THEN 1 ELSE 0", 1), "a negative value in the condition");
+
+    printf("a malformed conditional is refused\n");
+    check(refuses("IF 3>2 THEN 10"), "no ELSE");
+    check(refuses("IF 3>2 ELSE 20"), "no THEN");
+    check(refuses("IF 3 THEN 10 ELSE 20"), "no comparison");
+    check(refuses("IF THEN 10 ELSE 20"), "nothing to compare");
+    check(refuses("IF 3>2 THEN 10 ELSE"), "nothing after ELSE");
+    check(refuses("IF 3>2 THEN 10 ELSE 20 30"), "something left over at the end");
+    check(refuses("IFX 3>2 THEN 10 ELSE 20"), "a keyword that only starts the same way");
+    check(refuses("IF 3>2 THE 10 ELSE 20"), "a misspelled keyword");
+    check(refuses("IF 3>>2 THEN 10 ELSE 20"), "a doubled comparison");
+
+    printf("a branch that cannot be worked out spoils the line, taken or not\n");
+    check(refuses("IF 1>0 THEN 1 ELSE 1/0"), "a division by zero in the branch not taken");
+    check(refuses("IF 1>0 THEN 2^63 ELSE 0"), "an overflow in the branch taken");
+
+    printf("a plain sum still works, with no IF in sight\n");
+    check(evaluates("12+30", 42), "the M6 behaviour is unchanged");
+    check(refuses("THEN 1"), "a keyword on its own is not a sum");
+}
+
 static void test_evaluation(void)
 {
     printf("calc_evaluate adds and subtracts\n");
@@ -161,7 +202,9 @@ static void test_evaluation(void)
     check(evaluates("5++3", 8), "a plus then a unary plus");
     check(evaluates("5+-3", 2), "a plus then a unary minus");
     check(refuses("5A3"), "a letter in the middle");
-    check(refuses(" 5"), "a leading space");
+    check(evaluates(" 5", 5), "a leading space, which M7 skips like any other");
+    check(evaluates("1 + 2", 3), "spaces around an operator");
+    check(refuses("1 2"), "but a space still ends a number");
     check(refuses("5*"), "a trailing multiply");
     check(refuses("*5"), "a leading multiply");
     check(refuses("^5"), "a leading power");
@@ -247,8 +290,21 @@ static void test_typing(void)
     check(calc_key(&calc, '+'), "an operator after a number is allowed");
     check(!calc_key(&calc, '-'), "a sign after a sign is refused");
     check(line_is(&calc, "5+"), "and does not change the line");
-    check(!calc_key(&calc, 'A'), "a letter is refused");
-    check(!calc_key(&calc, ' '), "a space is refused");
+    check(!calc_key(&calc, 'A'), "a letter that cannot start a keyword is refused");
+    check(calc_key(&calc, ' '), "a space can be typed");
+
+    printf("only letters that could still make a keyword are accepted\n");
+    calc_reset(&calc);
+    check(calc_key(&calc, 'I'), "I could be the start of IF");
+    check(calc_key(&calc, 'F'), "and F completes it");
+    check(!calc_key(&calc, 'X'), "but IFX is not a keyword, so X is refused");
+    check(line_is(&calc, "IF"), "and the line is left as it was");
+    calc_reset(&calc);
+    check(!calc_key(&calc, 'A'), "a key pressed for some other reason stays out");
+    check(!calc_key(&calc, 'Z'), "as does any other stray letter");
+    check(line_is(&calc, "TYPE A SUM"), "the line is untouched");
+    type(&calc, "IF 3>2 THEN 10 ELSE 20");
+    check(line_is(&calc, "IF 3>2 THEN 10 ELSE 20"), "every keyword still types");
 
     printf("a sign may follow a multiply, divide or power\n");
     calc_reset(&calc);
@@ -273,12 +329,37 @@ static void test_typing(void)
     calc_key(&calc, CALC_EVALUATE);
     check(line_is(&calc, "2^5=32"), "two to the fifth");
 
+    printf("a conditional can be typed and shows the branch it took\n");
+    calc_reset(&calc);
+    type(&calc, "IF 3>2 THEN 10 ELSE 20");
+    check(line_is(&calc, "IF 3>2 THEN 10 ELSE 20"), "letters and spaces can be typed");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "IF 3>2 THEN 10 ELSE 20=10"), "and it answers");
+
+    calc_reset(&calc);
+    type(&calc, "IF 2>3 THEN 10 ELSE 20");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "IF 2>3 THEN 10 ELSE 20=20"), "the other branch");
+
+    printf("the equals key is a comparison now, not evaluate\n");
+    calc_reset(&calc);
+    type(&calc, "IF 5=5 THEN 1 ELSE 0");
+    check(calc.length == 20 && !calc.has_result,
+          "typing = adds a character rather than working the line out");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "IF 5=5 THEN 1 ELSE 0=1"), "enter is what evaluates");
+
     printf("an unreadable sum says so\n");
     calc_reset(&calc);
     type(&calc, "5+");
     calc_key(&calc, CALC_EVALUATE);
     check(line_is(&calc, "5+=ERROR"), "a trailing operator is an error");
     check(calc.error && !calc.has_result, "and is recorded as one");
+
+    printf("a whole conditional fits in the input\n");
+    calc_reset(&calc);
+    type(&calc, "IF 3>2 THEN 10 ELSE 20");
+    check(calc.length <= CALC_MAX_INPUT, "the longest example still fits");
 
     printf("the input has a limit\n");
     calc_reset(&calc);
@@ -308,6 +389,7 @@ int main(void)
     test_multiplication_and_division();
     test_powers();
     test_overflow();
+    test_conditionals();
     test_formatting();
     test_typing();
 

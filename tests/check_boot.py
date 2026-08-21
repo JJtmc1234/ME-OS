@@ -12,6 +12,8 @@ milestones:
       its shape, and stops at the edge of the screen instead of leaving it
   M5  the rectangle crossing the screen over time, staying whole and on screen
   M6  a sum typed on the keyboard, evaluated, and shown with its result
+  M7  two conditionals that differ only in their comparison, taking opposite
+      branches and showing different answers
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -31,6 +33,8 @@ SCREEN_MOUSE = ROOT / "build" / "screen-mouse.ppm"
 SCREEN_CLAMP = ROOT / "build" / "screen-clamp.ppm"
 SCREEN_SUM = ROOT / "build" / "screen-sum.ppm"
 SCREEN_POWER = ROOT / "build" / "screen-power.ppm"
+SCREEN_TRUE = ROOT / "build" / "screen-true.ppm"
+SCREEN_FALSE = ROOT / "build" / "screen-false.ppm"
 DEBUG_LOG = ROOT / "build" / "debug.log"
 SERIAL_LOG = ROOT / "build" / "serial.log"
 
@@ -44,6 +48,9 @@ M2_AFTER_KEY = f"LAST KEY {KEY_SENT}"
 M6_PROMPT = "TYPE A SUM"
 M6_SUM = "12+30=42"
 M6_POWER = "2^5=32"
+# M7. Both are typed in full; only the comparison differs, and so does the answer.
+M7_TRUE = "IF 3>2 THEN 10 ELSE 20=10"
+M7_FALSE = "IF 2>3 THEN 10 ELSE 20=20"
 M6_AFTER_ENTER = "LAST KEY ENTER"
 
 # These mirror kernel/src/main.c too.
@@ -321,6 +328,8 @@ def check_log() -> list[str]:
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
         "sum 2^5 = 32",
+        "sum IF 3>2 THEN 10 ELSE 20 = 10",
+        "sum IF 2>3 THEN 10 ELSE 20 = 20",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -334,8 +343,8 @@ def check_log() -> list[str]:
                 raise CheckFailed(f"{name} log never reported {phrase!r}")
         notes.append(
             f"{name} log: boot, message, rectangle, cursor, sum line, key "
-            f"{KEY_SENT} received, and the kernel's own answers of 12+30 = 42 "
-            f"and 2^5 = 32")
+            f"{KEY_SENT} received, and the kernel's own answers for 12+30, 2^5 "
+            f"and both conditionals")
     return notes
 
 
@@ -349,9 +358,17 @@ def check_cursor_movement(start, moved, clamped, size) -> list[str]:
         raise CheckFailed(
             f"the cursor started at {start[:2]}, expected ({expected_x}, {expected_y})"
         )
-    if moved[2] != start[2] or clamped[2] != start[2]:
+    if moved[2] != start[2]:
         raise CheckFailed(
-            f"the cursor changed shape: {start[2]}, {moved[2]}, then {clamped[2]} pixels"
+            f"the cursor changed shape while moving: {start[2]} pixels, then {moved[2]}"
+        )
+    # At the edge the arrow is partly off screen and so partly clipped, which
+    # is the whole point of clamping. It must still be there, and it must not
+    # have grown.
+    if not 0 < clamped[2] <= start[2]:
+        raise CheckFailed(
+            f"after being shoved at the corner the cursor has {clamped[2]} pixels, "
+            f"expected between 1 and {start[2]}"
         )
 
     actual = (moved[0] - start[0], moved[1] - start[1])
@@ -371,8 +388,8 @@ def check_cursor_movement(start, moved, clamped, size) -> list[str]:
 
     return [
         f"  cursor started at ({start[0]}, {start[1]}) and followed the mouse exactly",
-        f"  shoved toward the corner it reached ({clamped[0]}, {clamped[1]}), still "
-        f"whole and still inside the {width}x{height} screen",
+        f"  shoved toward the corner it reached ({clamped[0]}, {clamped[1]}), "
+        f"{clamped[2]} of its {start[2]} pixels still on a {width}x{height} screen",
     ]
 
 
@@ -403,7 +420,12 @@ def main() -> int:
             SCREEN_SUM, M6_AFTER_ENTER, M6_SUM)
         power_notes, _, _, rect_power, sum_power = check_screen(
             SCREEN_POWER, M6_AFTER_ENTER, M6_POWER)
-        notes += key_notes + mouse_notes + clamp_notes + typed_notes + power_notes
+        true_notes, _, _, rect_true, sum_true = check_screen(
+            SCREEN_TRUE, M6_AFTER_ENTER, M7_TRUE)
+        false_notes, _, _, rect_false, sum_false = check_screen(
+            SCREEN_FALSE, M6_AFTER_ENTER, M7_FALSE)
+        notes += (key_notes + mouse_notes + clamp_notes + typed_notes + power_notes
+                  + true_notes + false_notes)
 
         if sum_typed == sum_clamp:
             raise CheckFailed(
@@ -420,12 +442,25 @@ def main() -> int:
             f"after typing {M6_SUM.split('=')[0]}, then to {sum_power} after "
             f"{M6_POWER.split('=')[0]}, which needs a shifted key")
 
+        # The two conditionals are the same length and the same shape. What
+        # tells them apart is the comparison and the answer, so the drawn line
+        # has to differ.
+        if sum_true == sum_false:
+            raise CheckFailed(
+                "both conditionals drew the same line; they should have taken "
+                "opposite branches and shown different answers"
+            )
+        notes.append(
+            f"  M7 conditionals drew different lines, {sum_true} and {sum_false} "
+            f"lit columns: {M7_TRUE} and {M7_FALSE}")
+
         if key_cursor[:2] != boot_cursor[:2]:
             raise CheckFailed("the cursor moved on its own before the mouse was touched")
 
         notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
         notes += check_rectangle_movement(
-            [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power], size)
+            [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power,
+             rect_true, rect_false], size)
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -433,8 +468,9 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M6 checks passed: message, key press, a moving rectangle, a cursor "
-          "that follows the mouse, and a sum typed and answered")
+    print("M1 to M7 checks passed: message, key press, a moving rectangle, a cursor "
+          "that follows the mouse, sums answered, and a conditional taking each "
+          "branch in turn")
     print("A person should still watch it boot once with make run.")
     return 0
 

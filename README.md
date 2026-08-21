@@ -23,9 +23,10 @@ to a disk or a USB device.
 | M4 mouse cursor | A cursor that follows a mouse and stays on screen | Verified software milestone, QEMU |
 | M5 move rectangle | The rectangle crosses the screen over time | Verified software milestone, QEMU |
 | M6 basic arithmetic | Whole number sums typed on the keyboard, answered on screen | Verified software milestone, QEMU |
-| M7 conditionals | Simple if/else with visibly different outcomes | Next |
+| M7 conditionals | One IF, taking either branch, shown on screen | Verified software milestone, QEMU |
+| M8 variables | Named values that can be stored and changed | Next |
 
-All six milestones are checked automatically. `make test` boots the image
+All seven milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding and pointer clamping on the development machine, without an emulator. See
@@ -64,6 +65,23 @@ with the precedence they have on paper. Overflow, division by zero and
 fractional powers are refused and shown as `ERROR` rather than producing a wrong
 answer or faulting.
 
+**M7.** One conditional, on the same line:
+
+```text
+IF 3>2 THEN 10 ELSE 20      shows 10
+IF 2>3 THEN 10 ELSE 20      shows 20
+IF 5==5 THEN 1 ELSE 0       shows 1
+```
+
+The comparison is `=`, `==`, `<` or `>`, and all three places take a sum, so
+`IF 2^3=8 THEN 6*7 ELSE 0` gives 42. There are no variables, no nesting and no
+loops: those are later milestones, or no milestone at all. Both branches are
+worked out, so a branch that overflows makes the whole line an error even when
+it is not the one taken. Enter is now the only key that evaluates, because `=`
+is a comparison someone might want to type, and a letter is only accepted where
+one of the three keywords could still be forming, so a key pressed for some
+other reason cannot end up in the sum.
+
 | Key | In a sum |
 | --- | --- |
 | 0 to 9 | digits |
@@ -72,7 +90,8 @@ answer or faulting.
 | shift and 8, or keypad star | multiply |
 | slash | whole number divide |
 | shift and 6 | to the power of |
-| enter, or = | work it out |
+| shift and comma, shift and full stop | less than, greater than |
+| enter | work it out |
 | backspace | delete the last character |
 | escape | clear the line |
 

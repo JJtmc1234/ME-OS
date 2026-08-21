@@ -77,6 +77,13 @@ static const uint8_t glyph_caret[FONT_HEIGHT] = {
     0x20, 0x50, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+static const uint8_t glyph_less[FONT_HEIGHT] = {
+    0x08, 0x10, 0x20, 0x40, 0x20, 0x10, 0x08, 0x00,
+};
+static const uint8_t glyph_greater[FONT_HEIGHT] = {
+    0x80, 0x40, 0x20, 0x10, 0x20, 0x40, 0x80, 0x00,
+};
+
 const uint8_t *font_glyph(char c)
 {
     if (c == ' ') {
@@ -105,6 +112,12 @@ const uint8_t *font_glyph(char c)
     }
     if (c == '^') {
         return glyph_caret;
+    }
+    if (c == '<') {
+        return glyph_less;
+    }
+    if (c == '>') {
+        return glyph_greater;
     }
     return glyph_unknown;
 }

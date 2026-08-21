@@ -23,8 +23,8 @@ Nothing here has been booted on a physical machine yet.
 | M4 | Mouse cursor | A cursor is drawn, moves with a pointing device, and stays on screen | Verified software milestone |
 | M5 | Move rectangle | The rectangle moves across the screen over time, staying whole and on screen | Verified software milestone |
 | M6 | Basic arithmetic | Evaluates whole number arithmetic typed on the keyboard and shows the result | Verified software milestone |
-| M7 | Conditionals | Runs simple if/else logic and visibly demonstrates different outcomes | Next |
-| M8 | Variables | Stores and updates named values, and shows them changing | Planned |
+| M7 | Conditionals | One conditional expression, IF a compared to b THEN x ELSE y, taking either branch | Verified software milestone |
+| M8 | Variables | Stores and updates named values, and shows them changing | Next |
 | M9 | Keyboard controlled rectangle | Arrow or letter keys move the rectangle | Planned |
 | M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Planned |
 | M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Planned |
@@ -44,7 +44,7 @@ management, interrupts, processes or filesystems.
 
 ## Verification status
 
-M1 to M6 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M7 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -54,10 +54,12 @@ Two kinds of test run:
   that framebuffer drawing clips at every edge, that mouse packets decode and
   pointer movement clamps correctly, that timer wrap arithmetic and the
   rectangle's movement hold over long runs, that scancodes translate with and
-  without shift, and that arithmetic gets the right answer and refuses overflow,
-  division by zero and fractional powers. 228 checks in five programs.
+  without shift, and that arithmetic and the one conditional get the right
+  answer and refuse overflow, division by zero, fractional powers and malformed
+  input. 263 checks in five programs.
 - `make test` boots the real image headlessly, injects a key press, moves the
-  mouse, types two sums, and inspects six captured framebuffers: the sum line,
+  mouse, types two sums and two conditionals, and inspects eight captured
+  framebuffers: the sum line,
   the message, the key line, a rectangle that is whole, on screen and in a
   different place each time, and a cursor that starts in the right place,
   follows the mouse exactly, keeps its shape, and stays on screen.

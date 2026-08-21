@@ -45,6 +45,8 @@ static const char shifted[128] = {
     [0x07] = '^',   /* shift and 6 */
     [0x09] = '*',   /* shift and 8 */
     [0x0D] = '+',   /* shift and equals */
+    [0x33] = '<',   /* shift and comma */
+    [0x34] = '>',   /* shift and full stop */
 };
 
 static const char *named(uint8_t code)

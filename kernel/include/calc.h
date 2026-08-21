@@ -12,6 +12,14 @@
  * Every operation is checked before it happens. Overflow, division by zero and
  * a negative power are all refused and reported as an error, because a kernel
  * with no interrupt table cannot afford a divide fault.
+ *
+ * M7 adds one conditional form and nothing else:
+ *
+ *     IF <expression> <comparison> <expression> THEN <expression> ELSE <expression>
+ *
+ * with =, ==, < or > as the comparison. There are no variables, no nesting, no
+ * loops and no statements. Both branches are worked out, so a branch that
+ * overflows makes the whole line an error even when it is not the one taken.
  */
 #ifndef ME_CALC_H
 #define ME_CALC_H
@@ -21,7 +29,7 @@
 #include <stdint.h>
 
 /* Long enough for an expression worth typing without a screen full of digits. */
-#define CALC_MAX_INPUT 24
+#define CALC_MAX_INPUT 32
 /* A 64 bit value, a sign, and a terminator. */
 #define CALC_MAX_NUMBER 21
 
@@ -33,8 +41,9 @@ struct calc {
     bool error;
 };
 
-/* Control characters the caller maps its keys onto. */
-#define CALC_EVALUATE '='
+/* Control characters the caller maps its keys onto. Evaluating is enter alone:
+ * since M7 the equals key is a comparison someone might want to type. */
+#define CALC_EVALUATE '\n'
 #define CALC_DELETE   '\b'
 #define CALC_CLEAR    '\x1b'
 

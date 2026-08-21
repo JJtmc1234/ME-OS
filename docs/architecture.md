@@ -39,7 +39,7 @@ references them and `--gc-sections` would otherwise discard them.
 | `cursor.c` | drawing the cursor, and putting back what it covered |
 | `timer.c` | elapsed time, polled from the programmable interval timer |
 | `rect.c` | where the moving rectangle is, given how much time has passed |
-| `calc.c` | parsing and evaluating a typed sum, with checked arithmetic |
+| `calc.c` | parsing and evaluating a typed sum or conditional, with checked arithmetic |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 

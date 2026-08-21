@@ -37,9 +37,52 @@ static bool is_sign(char c)
     return c == '+' || c == '-';
 }
 
-static char peek(const struct parser *p)
+static bool is_letter(char c)
+{
+    return c >= 'A' && c <= 'Z';
+}
+
+static void skip_spaces(struct parser *p)
+{
+    while (p->pos < p->length && p->text[p->pos] == ' ') {
+        p->pos++;
+    }
+}
+
+/* The next character that matters. Spaces are skipped here rather than in a
+ * separate pass, which is why "1 + 2" works and "1 2" does not: digits are
+ * read without this, so a space ends a number. */
+static char peek(struct parser *p)
+{
+    skip_spaces(p);
+    return p->pos < p->length ? p->text[p->pos] : '\0';
+}
+
+/* The character right here, whatever it is. Used where a space would change
+ * the meaning, as in telling "==" from "= =". */
+static char peek_raw(const struct parser *p)
 {
     return p->pos < p->length ? p->text[p->pos] : '\0';
+}
+
+/* Consumes a keyword if it is next. A keyword has to end where it ends, so
+ * IFX is not IF. */
+static bool match_word(struct parser *p, const char *word)
+{
+    skip_spaces(p);
+
+    uint8_t at = p->pos;
+    for (uint8_t i = 0; word[i] != '\0'; i++) {
+        if (at >= p->length || p->text[at] != word[i]) {
+            return false;
+        }
+        at++;
+    }
+    if (at < p->length && is_letter(p->text[at])) {
+        return false;
+    }
+    p->pos = at;
+    return true;
 }
 
 static void copy(char *out, size_t size, const char *text, size_t *written)
@@ -145,13 +188,14 @@ static int64_t parse_expression(struct parser *p);
 
 static int64_t parse_number(struct parser *p)
 {
-    if (!is_digit(peek(p))) {
+    skip_spaces(p);
+    if (!is_digit(peek_raw(p))) {
         p->ok = false;
         return 0;
     }
 
     int64_t value = 0;
-    while (is_digit(peek(p))) {
+    while (is_digit(peek_raw(p))) {
         const int64_t digit = p->text[p->pos] - '0';
         value = mul_checked(value, 10, &p->ok);
         value = add_checked(value, digit, &p->ok);
@@ -249,6 +293,111 @@ static int64_t parse_expression(struct parser *p)
     return value;
 }
 
+/* comparison := '=' | '==' | '<' | '>' */
+enum comparison { CMP_NONE, CMP_EQUAL, CMP_LESS, CMP_GREATER };
+
+static enum comparison parse_comparison(struct parser *p)
+{
+    const char c = peek(p);
+    if (c == '=') {
+        p->pos++;
+        if (peek_raw(p) == '=') {
+            p->pos++;   /* == means the same as =, and reads better */
+        }
+        return CMP_EQUAL;
+    }
+    if (c == '<') {
+        p->pos++;
+        return CMP_LESS;
+    }
+    if (c == '>') {
+        p->pos++;
+        return CMP_GREATER;
+    }
+    return CMP_NONE;
+}
+
+/* statement := 'IF' expression comparison expression 'THEN' expression
+ *              'ELSE' expression
+ *            | expression
+ *
+ * One conditional, no nesting, no variables, no loops. Both branches are
+ * worked out, because the parser has to read past both of them anyway, so a
+ * branch that overflows spoils the line whether or not it is the one taken.
+ */
+static int64_t parse_statement(struct parser *p)
+{
+    if (!match_word(p, "IF")) {
+        return parse_expression(p);
+    }
+
+    const int64_t left = parse_expression(p);
+    if (!p->ok) {
+        return 0;
+    }
+
+    const enum comparison how = parse_comparison(p);
+    if (how == CMP_NONE) {
+        p->ok = false;
+        return 0;
+    }
+
+    const int64_t right = parse_expression(p);
+    if (!p->ok || !match_word(p, "THEN")) {
+        p->ok = false;
+        return 0;
+    }
+
+    const int64_t when_true = parse_expression(p);
+    if (!p->ok || !match_word(p, "ELSE")) {
+        p->ok = false;
+        return 0;
+    }
+
+    const int64_t when_false = parse_expression(p);
+    if (!p->ok) {
+        return 0;
+    }
+
+    bool holds = false;
+    switch (how) {
+    case CMP_EQUAL:   holds = left == right; break;
+    case CMP_LESS:    holds = left < right;  break;
+    case CMP_GREATER: holds = left > right;  break;
+    case CMP_NONE:    break;
+    }
+    return holds ? when_true : when_false;
+}
+
+/* The only words this milestone knows. */
+static const char *const keywords[] = { "IF", "THEN", "ELSE" };
+
+/* True when `letters` could still grow into one of them.
+ *
+ * This is what keeps stray keys out of the line. Letters have to be typeable
+ * because the keywords need them, but a key pressed for some other reason,
+ * like showing which key was last pressed, must not quietly become part of a
+ * sum. A letter is accepted only where a keyword could still be forming.
+ */
+static bool could_be_keyword(const char *letters, uint8_t length)
+{
+    for (uint8_t w = 0; w < sizeof keywords / sizeof keywords[0]; w++) {
+        const char *word = keywords[w];
+        bool matches = true;
+
+        for (uint8_t i = 0; i < length; i++) {
+            if (word[i] == '\0' || word[i] != letters[i]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void calc_reset(struct calc *calc)
 {
     if (calc == NULL) {
@@ -268,8 +417,9 @@ bool calc_evaluate(const char *text, uint8_t length, int64_t *out)
     }
 
     struct parser parser = { text, length, 0, true };
-    const int64_t value = parse_expression(&parser);
+    const int64_t value = parse_statement(&parser);
 
+    skip_spaces(&parser);
     if (!parser.ok || parser.pos != length) {
         return false;   /* malformed, or something left over at the end */
     }
@@ -310,8 +460,31 @@ bool calc_key(struct calc *calc, char key)
         return true;
     }
 
-    if (!is_digit(key) && !is_operator(key)) {
-        return false;   /* not a key this milestone knows about */
+    const bool comparison = key == '=' || key == '<' || key == '>';
+    if (!is_digit(key) && !is_operator(key) && !is_letter(key) &&
+        key != ' ' && !comparison) {
+        return false;   /* not a key these milestones know about */
+    }
+
+    if (is_letter(key)) {
+        /* Take the letters already being typed, add this one, and see whether
+         * a keyword could still come out of it. */
+        char word[8];
+        uint8_t count = 0;
+        uint8_t at = calc->length;
+
+        while (at > 0 && is_letter(calc->text[at - 1]) && count < sizeof word - 1) {
+            at--;
+            count++;
+        }
+        for (uint8_t i = 0; i < count; i++) {
+            word[i] = calc->text[at + i];
+        }
+        word[count] = key;
+
+        if (!could_be_keyword(word, (uint8_t)(count + 1))) {
+            return false;
+        }
     }
     if (calc->length >= CALC_MAX_INPUT) {
         return false;

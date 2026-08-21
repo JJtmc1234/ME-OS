@@ -7,8 +7,9 @@
  * M4: show a mouse cursor that moves, without disturbing any of them.
  * M5: move the rectangle across the screen over time, still without
  *     disturbing any of them.
- * M6: add and subtract whole numbers typed on the keyboard, and show the
- *     result, still without disturbing any of them.
+ * M6: work out whole number sums typed on the keyboard, and show the result,
+ *     still without disturbing any of them.
+ * M7: work out one conditional, IF a > b THEN x ELSE y, on the same line.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small

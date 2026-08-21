@@ -11,6 +11,8 @@
 #   build/screen-sum.ppm    the framebuffer after a sum is typed and evaluated
 #   build/screen-power.ppm  the framebuffer after a power is typed, which needs
 #                           a shifted key, and evaluated
+#   build/screen-true.ppm   a conditional whose condition holds
+#   build/screen-false.ppm  the same conditional with the condition reversed
 #   build/debug.log        kernel log via QEMU's debug port
 #   build/serial.log       the same log via COM1, which real hardware also has
 #
@@ -35,6 +37,14 @@ SUM_KEYS="${SUM_KEYS:-1 2 kp_add 3 0 ret}"
 SHOT_POWER="${SHOT_POWER:-build/screen-power.ppm}"
 # shift-6 is a caret, which is also a check that shift decoding works.
 POWER_KEYS="${POWER_KEYS:-2 shift-6 5 ret}"
+SHOT_TRUE="${SHOT_TRUE:-build/screen-true.ppm}"
+SHOT_FALSE="${SHOT_FALSE:-build/screen-false.ppm}"
+# IF 3>2 THEN 10 ELSE 20, and the same with the comparison reversed. shift-dot
+# is the greater than sign.
+TRUE_KEYS="${TRUE_KEYS:-i f spc 3 shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
+FALSE_KEYS="${FALSE_KEYS:-i f spc 2 shift-dot 3 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
+# Typing pace. The kernel polls the keyboard far faster than this.
+TYPE_DELAY="${TYPE_DELAY:-0.25}"
 # How far to push the mouse. tests/check_boot.py checks the cursor moved by
 # exactly this, so the two belong together.
 MOUSE_DX="${MOUSE_DX:-120}"
@@ -65,6 +75,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_CLAMP"
 : > "$SHOT_SUM"
 : > "$SHOT_POWER"
+: > "$SHOT_TRUE"
+: > "$SHOT_FALSE"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -94,17 +106,31 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     # Type a sum one key at a time, then press enter to evaluate it.
     for key in $SUM_KEYS; do
         echo "sendkey $key"
-        sleep 1
+        sleep "$TYPE_DELAY"
     done
     sleep 2
     echo "screendump $SHOT_SUM"
     sleep 2
     for key in $POWER_KEYS; do
         echo "sendkey $key"
-        sleep 1
+        sleep "$TYPE_DELAY"
     done
     sleep 2
     echo "screendump $SHOT_POWER"
+    sleep 2
+    for key in $TRUE_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_TRUE"
+    sleep 2
+    for key in $FALSE_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_FALSE"
     sleep 2
     echo "quit"
 } | "$QEMU" \
@@ -122,10 +148,13 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_CLAMP" ] || fail "QEMU produced no screenshot at $SHOT_CLAMP"
 [ -s "$SHOT_SUM" ] || fail "QEMU produced no screenshot at $SHOT_SUM"
 [ -s "$SHOT_POWER" ] || fail "QEMU produced no screenshot at $SHOT_POWER"
+[ -s "$SHOT_TRUE" ] || fail "QEMU produced no screenshot at $SHOT_TRUE"
+[ -s "$SHOT_FALSE" ] || fail "QEMU produced no screenshot at $SHOT_FALSE"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
 echo "boot-capture: typed the sum $SUM_KEYS, then the power $POWER_KEYS"
+echo "boot-capture: typed two conditionals, one true and one false"
 if [ -s "$DEBUG_LOG" ]; then
     echo "boot-capture: kernel log"
     sed 's/^/    /' "$DEBUG_LOG"
