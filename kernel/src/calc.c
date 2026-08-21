@@ -5,6 +5,7 @@
 
 /* A small recursive descent parser. Precedence, highest first:
  *
+ *   name     a stored value, or a number
  *   ^        power, right associative
  *   unary    a leading + or -
  *   * /      multiply and divide
@@ -20,6 +21,12 @@ struct parser {
     uint8_t length;
     uint8_t pos;
     bool ok;
+    struct vars *vars;   /* NULL when there are no variables at all */
+    /* The name this line assigns to, or empty for none. The value is not
+     * stored while parsing: a line like "X=5 6" parses an assignment and only
+     * then turns out to have something left over, and a line that is refused
+     * must leave the table exactly as it was. */
+    char assign[VARS_MAX_NAME + 1];
 };
 
 static bool is_digit(char c)
@@ -40,6 +47,38 @@ static bool is_sign(char c)
 static bool is_letter(char c)
 {
     return c >= 'A' && c <= 'Z';
+}
+
+/* A name starts with a letter and may go on with letters or digits, so X, X2
+ * and SUM1 are all names and 2X is not. Lowercase is not a letter here: the
+ * keyboard produces uppercase and the keywords are uppercase, so the whole
+ * language is. */
+static bool is_name_char(char c)
+{
+    return is_letter(c) || is_digit(c);
+}
+
+/* The words the language keeps for itself. They cannot be variable names. */
+static const char *const keywords[] = { "IF", "THEN", "ELSE" };
+
+static bool same_word(const char *a, const char *b)
+{
+    for (uint8_t i = 0; a[i] != '\0' || b[i] != '\0'; i++) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool is_keyword(const char *word)
+{
+    for (size_t i = 0; i < sizeof keywords / sizeof keywords[0]; i++) {
+        if (same_word(word, keywords[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void skip_spaces(struct parser *p)
@@ -66,7 +105,7 @@ static char peek_raw(const struct parser *p)
 }
 
 /* Consumes a keyword if it is next. A keyword has to end where it ends, so
- * IFX is not IF. */
+ * neither IFX nor IF1 is IF: both are names. */
 static bool match_word(struct parser *p, const char *word)
 {
     skip_spaces(p);
@@ -78,7 +117,7 @@ static bool match_word(struct parser *p, const char *word)
         }
         at++;
     }
-    if (at < p->length && is_letter(p->text[at])) {
+    if (at < p->length && is_name_char(p->text[at])) {
         return false;
     }
     p->pos = at;
@@ -207,16 +246,67 @@ static int64_t parse_number(struct parser *p)
     return value;
 }
 
+/* Reads a name into `out`, which holds VARS_MAX_NAME characters and a
+ * terminator. False leaves the position where it was, so the caller can try
+ * something else: there was no name here, it was a keyword, or it was longer
+ * than a slot can hold, which is refused rather than cut short into a
+ * different name. */
+static bool read_name(struct parser *p, char *out)
+{
+    skip_spaces(p);
+
+    const uint8_t start = p->pos;
+    if (!is_letter(peek_raw(p))) {
+        return false;
+    }
+
+    uint8_t count = 0;
+    while (is_name_char(peek_raw(p))) {
+        if (count >= VARS_MAX_NAME) {
+            p->pos = start;
+            return false;
+        }
+        out[count++] = p->text[p->pos++];
+    }
+    out[count] = '\0';
+
+    if (is_keyword(out)) {
+        p->pos = start;
+        return false;
+    }
+    return true;
+}
+
+/* primary := name | number
+ *
+ * A name that has never been assigned is an error rather than zero. A typo
+ * that quietly reads as zero gives a wrong answer and says nothing about it.
+ */
+static int64_t parse_primary(struct parser *p)
+{
+    char name[VARS_MAX_NAME + 1];
+
+    if (read_name(p, name)) {
+        int64_t value = 0;
+        if (!vars_get(p->vars, name, &value)) {
+            p->ok = false;
+            return 0;
+        }
+        return value;
+    }
+    return parse_number(p);
+}
+
 static int64_t parse_unary(struct parser *p);
 
-/* power := number ('^' unary)?
+/* power := primary ('^' unary)?
  *
  * The right hand side is a unary so 2^-1 parses and is then refused as a
  * fraction, rather than failing as a syntax error and blaming the wrong thing.
  */
 static int64_t parse_power(struct parser *p)
 {
-    const int64_t base = parse_number(p);
+    const int64_t base = parse_primary(p);
     if (!p->ok) {
         return 0;
     }
@@ -317,16 +407,45 @@ static enum comparison parse_comparison(struct parser *p)
     return CMP_NONE;
 }
 
-/* statement := 'IF' expression comparison expression 'THEN' expression
+/* statement := name '=' expression
+ *            | 'IF' expression comparison expression 'THEN' expression
  *              'ELSE' expression
  *            | expression
  *
- * One conditional, no nesting, no variables, no loops. Both branches are
- * worked out, because the parser has to read past both of them anyway, so a
- * branch that overflows spoils the line whether or not it is the one taken.
+ * One assignment or one conditional, no nesting and no loops. Both branches
+ * are worked out, because the parser has to read past both of them anyway, so
+ * a branch that overflows spoils the line whether or not it is the one taken.
+ * Assignment is a whole line on its own, so a branch cannot hide one and the
+ * order the branches are worked out in cannot matter.
  */
 static int64_t parse_statement(struct parser *p)
 {
+    const uint8_t start = p->pos;
+    char name[VARS_MAX_NAME + 1];
+
+    /* One '=' assigns. Two compare, and comparing only happens inside an IF,
+     * so X==5 on its own is still refused rather than quietly storing 5. */
+    if (read_name(p, name)) {
+        skip_spaces(p);
+        if (peek_raw(p) == '=' &&
+            (p->pos + 1u >= p->length || p->text[p->pos + 1] != '=')) {
+            p->pos++;
+
+            const int64_t value = parse_expression(p);
+            if (!p->ok) {
+                return 0;
+            }
+            for (uint8_t i = 0; i <= VARS_MAX_NAME; i++) {
+                p->assign[i] = name[i];
+                if (name[i] == '\0') {
+                    break;
+                }
+            }
+            return value;   /* an assignment answers with the value it stores */
+        }
+    }
+    p->pos = start;
+
     if (!match_word(p, "IF")) {
         return parse_expression(p);
     }
@@ -369,35 +488,17 @@ static int64_t parse_statement(struct parser *p)
     return holds ? when_true : when_false;
 }
 
-/* The only words this milestone knows. */
-static const char *const keywords[] = { "IF", "THEN", "ELSE" };
-
-/* True when `letters` could still grow into one of them.
- *
- * This is what keeps stray keys out of the line. Letters have to be typeable
- * because the keywords need them, but a key pressed for some other reason,
- * like showing which key was last pressed, must not quietly become part of a
- * sum. A letter is accepted only where a keyword could still be forming.
- */
-static bool could_be_keyword(const char *letters, uint8_t length)
+void calc_init(struct calc *calc, struct vars *vars)
 {
-    for (uint8_t w = 0; w < sizeof keywords / sizeof keywords[0]; w++) {
-        const char *word = keywords[w];
-        bool matches = true;
-
-        for (uint8_t i = 0; i < length; i++) {
-            if (word[i] == '\0' || word[i] != letters[i]) {
-                matches = false;
-                break;
-            }
-        }
-        if (matches) {
-            return true;
-        }
+    if (calc == NULL) {
+        return;
     }
-    return false;
+    calc->vars = vars;
+    calc_reset(calc);
 }
 
+/* Clears the line. calc->vars is deliberately untouched: a variable outlives
+ * the line that made it, which is the whole point of having one. */
 void calc_reset(struct calc *calc)
 {
     if (calc == NULL) {
@@ -410,18 +511,24 @@ void calc_reset(struct calc *calc)
     calc->error = false;
 }
 
-bool calc_evaluate(const char *text, uint8_t length, int64_t *out)
+bool calc_evaluate(const char *text, uint8_t length, struct vars *vars,
+                   int64_t *out)
 {
     if (text == NULL || out == NULL || length == 0) {
         return false;
     }
 
-    struct parser parser = { text, length, 0, true };
+    struct parser parser = { text, length, 0, true, vars, { '\0' } };
     const int64_t value = parse_statement(&parser);
 
     skip_spaces(&parser);
     if (!parser.ok || parser.pos != length) {
         return false;   /* malformed, or something left over at the end */
+    }
+    /* The line is whole, so an assignment can finally happen. It still fails
+     * when every slot holds a different name. */
+    if (parser.assign[0] != '\0' && !vars_set(vars, parser.assign, value)) {
+        return false;
     }
     *out = value;
     return true;
@@ -455,7 +562,8 @@ bool calc_key(struct calc *calc, char key)
         if (calc->length == 0) {
             return false;
         }
-        calc->has_result = calc_evaluate(calc->text, calc->length, &calc->result);
+        calc->has_result = calc_evaluate(calc->text, calc->length, calc->vars,
+                                         &calc->result);
         calc->error = !calc->has_result;
         return true;
     }
@@ -466,26 +574,11 @@ bool calc_key(struct calc *calc, char key)
         return false;   /* not a key these milestones know about */
     }
 
-    if (is_letter(key)) {
-        /* Take the letters already being typed, add this one, and see whether
-         * a keyword could still come out of it. */
-        char word[8];
-        uint8_t count = 0;
-        uint8_t at = calc->length;
-
-        while (at > 0 && is_letter(calc->text[at - 1]) && count < sizeof word - 1) {
-            at--;
-            count++;
-        }
-        for (uint8_t i = 0; i < count; i++) {
-            word[i] = calc->text[at + i];
-        }
-        word[count] = key;
-
-        if (!could_be_keyword(word, (uint8_t)(count + 1))) {
-            return false;
-        }
-    }
+    /* Until M8 a letter was only accepted where one of the three keywords
+     * could still be forming, so a key pressed to see its name on the key line
+     * could not end up in the sum. Variables need names, so every letter is
+     * part of the language now and every letter types. The parser is what
+     * decides whether the line makes sense. */
     if (calc->length >= CALC_MAX_INPUT) {
         return false;
     }

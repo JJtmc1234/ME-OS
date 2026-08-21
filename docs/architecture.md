@@ -39,7 +39,8 @@ references them and `--gc-sections` would otherwise discard them.
 | `cursor.c` | drawing the cursor, and putting back what it covered |
 | `timer.c` | elapsed time, polled from the programmable interval timer |
 | `rect.c` | where the moving rectangle is, given how much time has passed |
-| `calc.c` | parsing and evaluating a typed sum or conditional, with checked arithmetic |
+| `calc.c` | parsing and evaluating a typed sum, conditional or assignment, with checked arithmetic |
+| `vars.c` | a fixed table of eight named whole numbers |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -70,6 +71,13 @@ answer will not fit, and powers by repeating a checked multiplication. Checking
 afterwards was tried first and did not work: signed overflow is undefined, so
 the compiler was entitled to delete the check that was meant to catch it, and it
 did. The host tests caught that.
+
+**Variables are stored only once the whole line has parsed.** `calc.c` reads an
+assignment, works out the value, and remembers the name. `calc_evaluate` does
+the storing, after it has checked that nothing is left over at the end. Storing
+as soon as the assignment parsed was tried first, and it meant `X=5 6` stored 5
+and then reported an error, which is the worst of both. A line that is refused
+now leaves the table exactly as it was.
 
 **Time comes from a counter, not from the loop.** The PIT's channel 0 counts
 down and wraps about every 55 milliseconds. The loop reads it, adds up the

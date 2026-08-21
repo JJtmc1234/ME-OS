@@ -24,12 +24,14 @@ to a disk or a USB device.
 | M5 move rectangle | The rectangle crosses the screen over time | Verified software milestone, QEMU |
 | M6 basic arithmetic | Whole number sums typed on the keyboard, answered on screen | Verified software milestone, QEMU |
 | M7 conditionals | One IF, taking either branch, shown on screen | Verified software milestone, QEMU |
-| M8 variables | Named values that can be stored and changed | Next |
+| M8 variables | Named values that can be stored and changed | Verified software milestone, QEMU |
+| M9 keyboard controlled rectangle | Keys move the rectangle | Next |
 
-All seven milestones are checked automatically. `make test` boots the image
+All eight milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
-decoding and pointer clamping on the development machine, without an emulator. See
+decoding, pointer clamping, arithmetic and the variable table on the
+development machine, without an emulator. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Success conditions
@@ -74,17 +76,41 @@ IF 5==5 THEN 1 ELSE 0       shows 1
 ```
 
 The comparison is `=`, `==`, `<` or `>`, and all three places take a sum, so
-`IF 2^3=8 THEN 6*7 ELSE 0` gives 42. There are no variables, no nesting and no
+`IF 2^3=8 THEN 6*7 ELSE 0` gives 42. There is no nesting and there are no
 loops: those are later milestones, or no milestone at all. Both branches are
 worked out, so a branch that overflows makes the whole line an error even when
-it is not the one taken. Enter is now the only key that evaluates, because `=`
-is a comparison someone might want to type, and a letter is only accepted where
-one of the three keywords could still be forming, so a key pressed for some
-other reason cannot end up in the sum.
+it is not the one taken. Enter is the only key that evaluates, because `=` is
+something someone might want to type: at M7 as a comparison, and at M8 as an
+assignment.
+
+**M8.** A value can be given a name, and the name used on any later line:
+
+```text
+X=5                         shows X=5=5
+X+3                         shows X+3=8
+IF X>2 THEN 10 ELSE 20      shows 10
+```
+
+A name is an uppercase letter followed by up to three more letters or digits,
+so `X`, `X2` and `SUM1` are all names. Eight names fit, and a ninth is
+refused rather than throwing one away. `IF`, `THEN` and `ELSE` are reserved. A name may
+be used anywhere a number may be, including inside a condition and inside
+either branch. Reading a name that was never given a value is an error rather
+than zero, because a typo that quietly reads as zero gives a wrong answer and
+says nothing about it. A line that is refused stores nothing, so `X=5 6` leaves
+`X` exactly as it was. There is one global table and no scope, no loops, no
+functions, no arrays and no strings, and nothing survives a reboot.
+
+Every letter types now, because a variable needs a name. Until M8 a letter was
+only accepted where one of `IF`, `THEN` or `ELSE` could still be forming, which
+kept a key pressed for some other reason out of the sum. That rule could not
+survive variables, so escape clears the line instead.
 
 | Key | In a sum |
 | --- | --- |
 | 0 to 9 | digits |
+| A to Z | a keyword, or the name of a variable |
+| = | store what follows under the name in front of it |
 | shift and = | plus |
 | minus | minus |
 | shift and 8, or keypad star | multiply |
@@ -141,7 +167,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
-                  timer, rectangle, calculator, logging, memory
+                  timer, rectangle, calculator, variables, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)
 scripts/          headless boot capture for testing

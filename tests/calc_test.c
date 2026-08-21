@@ -1,9 +1,12 @@
-/* Host unit test for M6's arithmetic.
+/* Host unit test for the calculator: M6 arithmetic, M7 conditionals and M8
+ * variables.
  *
- * The whole milestone is a pure function on a small piece of state, so all of
- * it can be checked here: parsing, evaluation, overflow, formatting, and what
- * each key does to the line on screen. The emulator only has to confirm that
- * the same code is reached from a real keyboard.
+ * The whole of it is a pure function on a small piece of state, so all of it
+ * can be checked here: parsing, evaluation, overflow, formatting, storing and
+ * reading names, and what each key does to the line on screen. The emulator
+ * only has to confirm that the same code is reached from a real keyboard.
+ *
+ * The table itself is checked separately, in tests/vars_test.c.
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,19 +25,31 @@ static void check(int condition, const char *what)
     }
 }
 
-static int evaluates(const char *text, int64_t expected)
+static int evaluates_in(struct vars *env, const char *text, int64_t expected)
 {
     int64_t out = 0;
-    if (!calc_evaluate(text, (uint8_t)strlen(text), &out)) {
+    if (!calc_evaluate(text, (uint8_t)strlen(text), env, &out)) {
         return 0;
     }
     return out == expected;
 }
 
-static int refuses(const char *text)
+static int refuses_in(struct vars *env, const char *text)
 {
     int64_t out = 12345;
-    return !calc_evaluate(text, (uint8_t)strlen(text), &out) && out == 12345;
+    return !calc_evaluate(text, (uint8_t)strlen(text), env, &out) && out == 12345;
+}
+
+/* Most of the language has nothing to do with variables, so those checks pass
+ * no table at all: every name is then unknown, which is what they expect. */
+static int evaluates(const char *text, int64_t expected)
+{
+    return evaluates_in(NULL, text, expected);
+}
+
+static int refuses(const char *text)
+{
+    return refuses_in(NULL, text);
 }
 
 static void type(struct calc *calc, const char *keys)
@@ -176,6 +191,140 @@ static void test_conditionals(void)
     check(refuses("THEN 1"), "a keyword on its own is not a sum");
 }
 
+static void test_variables(void)
+{
+    struct vars env;
+    vars_reset(&env);
+
+    printf("a name can be given a value, and the line answers with it\n");
+    check(evaluates_in(&env, "X=5", 5), "X=5 answers 5");
+    check(evaluates_in(&env, "X", 5), "and X is 5 afterwards");
+    check(evaluates_in(&env, "X = 7", 7), "spaces around the equals are fine");
+    check(evaluates_in(&env, "X", 7), "overwriting a name replaces its value");
+
+    printf("names may be a letter, or letters and digits\n");
+    check(evaluates_in(&env, "Y2=3", 3), "a letter and a digit");
+    check(evaluates_in(&env, "ABCD=4", 4), "the longest name that fits");
+    check(evaluates_in(&env, "ABCD", 4), "and reads back");
+    check(refuses_in(&env, "ABCDE=1"), "one character longer is refused");
+    check(refuses_in(&env, "2X=1"), "a name cannot start with a digit");
+
+    printf("case is not folded: the language is uppercase\n");
+    check(refuses_in(&env, "x"), "lowercase x is not the name X");
+    check(refuses_in(&env, "x=1"), "and cannot be assigned either");
+    check(evaluates_in(&env, "X", 7), "X is still 7");
+
+    printf("a name that was never given a value is an error, not zero\n");
+    check(refuses_in(&env, "Q"), "reading an unknown name");
+    check(refuses_in(&env, "Q+1"), "using one in a sum");
+    check(refuses(  "X"), "and with no table at all, every name is unknown");
+
+    printf("names work anywhere a number works\n");
+    check(evaluates_in(&env, "X+3", 10), "on the left of a sum");
+    check(evaluates_in(&env, "3+X", 10), "on the right");
+    check(evaluates_in(&env, "X*Y2", 21), "two names");
+    check(evaluates_in(&env, "-X", -7), "with a leading sign");
+    check(evaluates_in(&env, "2^Y2", 8), "as a power");
+    check(evaluates_in(&env, "X^2", 49), "as a base");
+    check(evaluates_in(&env, "X-X", 0), "the same name twice");
+    check(evaluates_in(&env, "N=X*2+1", 15), "a whole sum can be stored");
+    check(evaluates_in(&env, "N", 15), "and read back");
+
+    printf("names work in a conditional, in the test and in both branches\n");
+    check(evaluates_in(&env, "IF X>2 THEN 10 ELSE 20", 10), "a name in the condition");
+    check(evaluates_in(&env, "IF X<2 THEN 10 ELSE 20", 20), "the other way round");
+    check(evaluates_in(&env, "IF 1>0 THEN X ELSE 0", 7), "a name in the branch taken");
+    check(evaluates_in(&env, "IF 1<0 THEN 0 ELSE X", 7), "a name in the other branch");
+    check(evaluates_in(&env, "IF X=7 THEN X+1 ELSE X-1", 8), "names throughout");
+    check(refuses_in(&env, "IF 1>0 THEN 1 ELSE Q"), "an unknown name in the branch not taken");
+
+    printf("an assignment is a whole line, and a comparison is not one\n");
+    check(refuses_in(&env, "X==5"), "two equals signs compare, and compare nowhere");
+    check(evaluates_in(&env, "X", 7), "so nothing was stored");
+    check(refuses_in(&env, "IF 1>0 THEN X=1 ELSE 0"), "a branch cannot assign");
+    check(evaluates_in(&env, "X", 7), "and did not");
+    check(refuses_in(&env, "IF=1"), "a keyword cannot be a name");
+    check(refuses_in(&env, "THEN=1"), "nor can THEN");
+    check(refuses_in(&env, "ELSE"), "nor is a keyword a value");
+    check(evaluates_in(&env, "IF1=2", 2), "but IF1 is a name of its own");
+    check(evaluates_in(&env, "IF1", 2), "and reads back");
+
+    printf("a malformed assignment stores nothing\n");
+    check(refuses_in(&env, "X="), "nothing to assign");
+    check(refuses_in(&env, "=5"), "nothing to assign to");
+    check(refuses_in(&env, "X=1+"), "a trailing operator");
+    check(refuses_in(&env, "X=Q"), "an unknown name on the right");
+    check(refuses_in(&env, "X=1/0"), "a division by zero");
+    check(refuses_in(&env, "X=9223372036854775807+1"), "a value that would not fit");
+    check(refuses_in(&env, "X=5 6"), "something left over at the end");
+    check(refuses_in(&env, "X=Y=1"), "assignment does not chain");
+    check(evaluates_in(&env, "X", 7), "X is still 7 after every one of those");
+
+    printf("the table is fixed, and says so when it is full\n");
+    struct vars full;
+    vars_reset(&full);
+    char line[8] = { 'A', '=', '1', '\0' };
+    for (int i = 0; i < VARS_MAX; i++) {
+        line[0] = (char)('A' + i);
+        check(evaluates_in(&full, line, 1), "a name while there is room");
+    }
+    check(refuses_in(&full, "ZZ=1"), "one name too many is refused");
+    check(refuses_in(&full, "ZZ"), "and was not stored");
+    check(evaluates_in(&full, "A=9", 9), "a name already in the table still works");
+    check(evaluates_in(&full, "A", 9), "and takes the new value");
+
+    printf("the M6 and M7 behaviour is unchanged with a table present\n");
+    check(evaluates_in(&env, "12+30", 42), "a plain sum");
+    check(evaluates_in(&env, "IF 3>2 THEN 10 ELSE 20", 10), "a plain conditional");
+    check(refuses_in(&env, "5A3"), "a stray letter in the middle of a number");
+    check(refuses_in(&env, "1 2"), "a space still ends a number");
+}
+
+static void test_typing_variables(void)
+{
+    struct calc calc;
+    struct vars env;
+
+    vars_reset(&env);
+    calc_init(&calc, &env);
+
+    printf("a variable can be typed, stored, and used on the next line\n");
+    type(&calc, "X=5");
+    check(line_is(&calc, "X=5"), "the assignment as typed");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "X=5=5"), "and it answers with what it stored");
+    check(calc.has_result && calc.result == 5, "the result is recorded");
+
+    type(&calc, "X+3");
+    check(line_is(&calc, "X+3"), "typing starts a new line, as it always did");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "X+3=8"), "and the stored value is used");
+
+    type(&calc, "IF X>2 THEN 10 ELSE 20");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "IF X>2 THEN 10 ELSE 20=10"), "and so is a conditional");
+
+    printf("clearing the line does not forget the variables\n");
+    calc_key(&calc, CALC_CLEAR);
+    check(line_is(&calc, "TYPE A SUM"), "the line is empty again");
+    type(&calc, "X");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "X=5"), "X is still 5");
+
+    printf("an unknown name shows an error rather than a wrong answer\n");
+    type(&calc, "Q+1");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "Q+1=ERROR"), "the line says so");
+    check(calc.error && !calc.has_result, "and it is recorded as an error");
+
+    printf("a calculator with no table at all has no variables\n");
+    struct calc bare;
+    calc_init(&bare, NULL);
+    type(&bare, "X=5");
+    calc_key(&bare, CALC_EVALUATE);
+    check(line_is(&bare, "X=5=ERROR"), "storing has nowhere to go");
+}
+
 static void test_evaluation(void)
 {
     printf("calc_evaluate adds and subtracts\n");
@@ -219,9 +368,9 @@ static void test_evaluation(void)
     check(evaluates("-9223372036854775807-1", INT64_MIN), "the most negative value");
 
     int64_t out = 0;
-    check(!calc_evaluate(NULL, 3, &out), "a null expression");
-    check(!calc_evaluate("1+1", 3, NULL), "nowhere to put the answer");
-    check(!calc_evaluate("1+1", 0, &out), "a length of zero");
+    check(!calc_evaluate(NULL, 3, NULL, &out), "a null expression");
+    check(!calc_evaluate("1+1", 3, NULL, NULL), "nowhere to put the answer");
+    check(!calc_evaluate("1+1", 0, NULL, &out), "a length of zero");
 }
 
 static void test_formatting(void)
@@ -255,7 +404,7 @@ static void test_typing(void)
     struct calc calc;
 
     printf("typing builds a sum\n");
-    calc_reset(&calc);
+    calc_init(&calc, NULL);
     check(line_is(&calc, "TYPE A SUM"), "an empty calculator prompts");
 
     type(&calc, "12+30");
@@ -290,19 +439,14 @@ static void test_typing(void)
     check(calc_key(&calc, '+'), "an operator after a number is allowed");
     check(!calc_key(&calc, '-'), "a sign after a sign is refused");
     check(line_is(&calc, "5+"), "and does not change the line");
-    check(!calc_key(&calc, 'A'), "a letter that cannot start a keyword is refused");
     check(calc_key(&calc, ' '), "a space can be typed");
 
-    printf("only letters that could still make a keyword are accepted\n");
+    printf("since M8 every letter types, because a variable can be named\n");
     calc_reset(&calc);
-    check(calc_key(&calc, 'I'), "I could be the start of IF");
-    check(calc_key(&calc, 'F'), "and F completes it");
-    check(!calc_key(&calc, 'X'), "but IFX is not a keyword, so X is refused");
-    check(line_is(&calc, "IF"), "and the line is left as it was");
+    check(calc_key(&calc, 'X'), "a letter that starts no keyword is a name");
+    check(calc_key(&calc, '2'), "and a digit can follow it");
+    check(line_is(&calc, "X2"), "the line shows the name");
     calc_reset(&calc);
-    check(!calc_key(&calc, 'A'), "a key pressed for some other reason stays out");
-    check(!calc_key(&calc, 'Z'), "as does any other stray letter");
-    check(line_is(&calc, "TYPE A SUM"), "the line is untouched");
     type(&calc, "IF 3>2 THEN 10 ELSE 20");
     check(line_is(&calc, "IF 3>2 THEN 10 ELSE 20"), "every keyword still types");
 
@@ -376,6 +520,7 @@ static void test_typing(void)
     check(line_is(&calc, "-8+3=-5"), "negative input and negative result");
 
     printf("nothing crashes on a null calculator\n");
+    calc_init(NULL, NULL);
     check(!calc_key(NULL, '1'), "a null calculator");
     char line[8];
     calc_line(NULL, line, sizeof line);
@@ -390,8 +535,10 @@ int main(void)
     test_powers();
     test_overflow();
     test_conditionals();
+    test_variables();
     test_formatting();
     test_typing();
+    test_typing_variables();
 
     if (failures > 0) {
         printf("\n%d arithmetic check(s) FAILED\n", failures);

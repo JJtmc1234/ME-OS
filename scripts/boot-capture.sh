@@ -13,6 +13,9 @@
 #                           a shifted key, and evaluated
 #   build/screen-true.ppm   a conditional whose condition holds
 #   build/screen-false.ppm  the same conditional with the condition reversed
+#   build/screen-assign.ppm a value stored under a name
+#   build/screen-var.ppm    that name used in a sum on a later line
+#   build/screen-varif.ppm  that name used in a conditional on a later line
 #   build/debug.log        kernel log via QEMU's debug port
 #   build/serial.log       the same log via COM1, which real hardware also has
 #
@@ -32,8 +35,9 @@ SHOT_MOUSE="${SHOT_MOUSE:-build/screen-mouse.ppm}"
 SHOT_CLAMP="${SHOT_CLAMP:-build/screen-clamp.ppm}"
 SHOT_SUM="${SHOT_SUM:-build/screen-sum.ppm}"
 # The sum typed on the emulated keyboard. tests/check_boot.py expects this one,
-# so the two belong together.
-SUM_KEYS="${SUM_KEYS:-1 2 kp_add 3 0 ret}"
+# so the two belong together. It starts with escape because since M8 every
+# letter types, so the key injected to prove M2 is sitting on the line.
+SUM_KEYS="${SUM_KEYS:-esc 1 2 kp_add 3 0 ret}"
 SHOT_POWER="${SHOT_POWER:-build/screen-power.ppm}"
 # shift-6 is a caret, which is also a check that shift decoding works.
 POWER_KEYS="${POWER_KEYS:-2 shift-6 5 ret}"
@@ -43,6 +47,14 @@ SHOT_FALSE="${SHOT_FALSE:-build/screen-false.ppm}"
 # is the greater than sign.
 TRUE_KEYS="${TRUE_KEYS:-i f spc 3 shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
 FALSE_KEYS="${FALSE_KEYS:-i f spc 2 shift-dot 3 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
+# M8. Store 5 under X, then use X on two later lines. The unshifted equals key
+# is the assignment, which is why it is not the key that evaluates.
+SHOT_ASSIGN="${SHOT_ASSIGN:-build/screen-assign.ppm}"
+SHOT_VAR="${SHOT_VAR:-build/screen-var.ppm}"
+SHOT_VARIF="${SHOT_VARIF:-build/screen-varif.ppm}"
+ASSIGN_KEYS="${ASSIGN_KEYS:-x equal 5 ret}"
+VAR_KEYS="${VAR_KEYS:-x kp_add 3 ret}"
+VARIF_KEYS="${VARIF_KEYS:-i f spc x shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
 # Typing pace. The kernel polls the keyboard far faster than this.
 TYPE_DELAY="${TYPE_DELAY:-0.25}"
 # How far to push the mouse. tests/check_boot.py checks the cursor moved by
@@ -77,6 +89,9 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_POWER"
 : > "$SHOT_TRUE"
 : > "$SHOT_FALSE"
+: > "$SHOT_ASSIGN"
+: > "$SHOT_VAR"
+: > "$SHOT_VARIF"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -132,6 +147,29 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_FALSE"
     sleep 2
+    # M8. Each of these is a separate line, so the last two only work if the
+    # value stored by the first one is still there.
+    for key in $ASSIGN_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_ASSIGN"
+    sleep 2
+    for key in $VAR_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_VAR"
+    sleep 2
+    for key in $VARIF_KEYS; do
+        echo "sendkey $key"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_VARIF"
+    sleep 2
     echo "quit"
 } | "$QEMU" \
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
@@ -150,11 +188,15 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_POWER" ] || fail "QEMU produced no screenshot at $SHOT_POWER"
 [ -s "$SHOT_TRUE" ] || fail "QEMU produced no screenshot at $SHOT_TRUE"
 [ -s "$SHOT_FALSE" ] || fail "QEMU produced no screenshot at $SHOT_FALSE"
+[ -s "$SHOT_ASSIGN" ] || fail "QEMU produced no screenshot at $SHOT_ASSIGN"
+[ -s "$SHOT_VAR" ] || fail "QEMU produced no screenshot at $SHOT_VAR"
+[ -s "$SHOT_VARIF" ] || fail "QEMU produced no screenshot at $SHOT_VARIF"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
 echo "boot-capture: typed the sum $SUM_KEYS, then the power $POWER_KEYS"
 echo "boot-capture: typed two conditionals, one true and one false"
+echo "boot-capture: stored X, then used it in a sum and in a conditional"
 if [ -s "$DEBUG_LOG" ]; then
     echo "boot-capture: kernel log"
     sed 's/^/    /' "$DEBUG_LOG"

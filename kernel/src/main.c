@@ -10,6 +10,7 @@
  * M6: work out whole number sums typed on the keyboard, and show the result,
  *     still without disturbing any of them.
  * M7: work out one conditional, IF a > b THEN x ELSE y, on the same line.
+ * M8: remember values under names, and use them in sums and conditionals.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -29,6 +30,7 @@
 #include "pointer.h"
 #include "rect.h"
 #include "timer.h"
+#include "vars.h"
 
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
@@ -79,6 +81,9 @@ static uint32_t colour_background;
 static uint32_t colour_rect;
 static uint64_t sum_line_y;
 static struct calc calc_state;
+/* M8: the variables. They sit beside the calculator rather than inside it
+ * because clearing the line must not forget what has been stored. */
+static struct vars vars_state;
 static uint32_t colour_cursor;
 static struct pointer pointer_state;
 static struct moving_rect rect_state;
@@ -352,7 +357,8 @@ void kmain(void)
     sum_line_y = y > FONT_HEIGHT * key_line_scale * M6_LINE_GAP
         ? y - FONT_HEIGHT * key_line_scale * M6_LINE_GAP
         : 0;
-    calc_reset(&calc_state);
+    vars_reset(&vars_state);
+    calc_init(&calc_state, &vars_state);
     draw_sum_line();
     log_stage("drew the M6 sum line");
 

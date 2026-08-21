@@ -14,6 +14,8 @@ milestones:
   M6  a sum typed on the keyboard, evaluated, and shown with its result
   M7  two conditionals that differ only in their comparison, taking opposite
       branches and showing different answers
+  M8  a value stored under a name, then used in a sum and in a conditional on
+      later lines, which only works if it was really remembered
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -35,6 +37,9 @@ SCREEN_SUM = ROOT / "build" / "screen-sum.ppm"
 SCREEN_POWER = ROOT / "build" / "screen-power.ppm"
 SCREEN_TRUE = ROOT / "build" / "screen-true.ppm"
 SCREEN_FALSE = ROOT / "build" / "screen-false.ppm"
+SCREEN_ASSIGN = ROOT / "build" / "screen-assign.ppm"
+SCREEN_VAR = ROOT / "build" / "screen-var.ppm"
+SCREEN_VARIF = ROOT / "build" / "screen-varif.ppm"
 DEBUG_LOG = ROOT / "build" / "debug.log"
 SERIAL_LOG = ROOT / "build" / "serial.log"
 
@@ -51,7 +56,15 @@ M6_POWER = "2^5=32"
 # M7. Both are typed in full; only the comparison differs, and so does the answer.
 M7_TRUE = "IF 3>2 THEN 10 ELSE 20=10"
 M7_FALSE = "IF 2>3 THEN 10 ELSE 20=20"
+# M8. Three separate lines: the second and third only work if the first one's
+# value survived them being typed.
+M8_ASSIGN = "X=5=5"
+M8_VAR = "X+3=8"
+M8_VARIF = "IF X>2 THEN 10 ELSE 20=10"
 M6_AFTER_ENTER = "LAST KEY ENTER"
+# Every letter types since M8, so the key injected to prove M2 lands on the sum
+# line as well as on the key line, and stays there until escape clears it.
+M8_KEY_ON_SUM_LINE = KEY_SENT
 
 # These mirror kernel/src/main.c too.
 RECT_COLOUR = (60, 170, 220)
@@ -79,13 +92,19 @@ class CheckFailed(Exception):
 class Band:
     """One horizontal line of white pixels."""
 
-    def __init__(self, rows: set[int], columns: set[int]) -> None:
+    def __init__(self, rows: dict[int, set[int]]) -> None:
         self.top = min(rows)
         self.bottom = max(rows)
         self.height = self.bottom - self.top + 1
-        self.columns = columns
-        self.left = min(columns)
-        self.right = max(columns)
+        self.columns: set[int] = set()
+        for columns in rows.values():
+            self.columns |= columns
+        self.left = min(self.columns)
+        self.right = max(self.columns)
+        # Every lit pixel, not just every lit column. Two lines can light the
+        # same columns and still look nothing alike, which is exactly what
+        # happens with X=5=5 and X+3=8.
+        self.ink = sum(len(columns) for columns in rows.values())
 
     @property
     def centre_x(self) -> float:
@@ -106,10 +125,6 @@ class Band:
         scale = max(1, self.height // INK_HEIGHT)
         threshold = 5 * scale
         return sum(1 for a, b in zip(columns, columns[1:]) if b - a > threshold)
-
-    @property
-    def lit(self) -> int:
-        return len(self.columns)
 
     @property
     def glyphs(self) -> int:
@@ -194,17 +209,15 @@ def find_bands(path: Path):
     width, height, rows, rect, cursor = read_screen(path)
 
     bands: list[Band] = []
-    current_rows: set[int] = set()
-    current_cols: set[int] = set()
+    current: dict[int, set[int]] = {}
     previous = None
     for row in sorted(rows):
         if previous is not None and row != previous + 1:
-            bands.append(Band(current_rows, current_cols))
-            current_rows, current_cols = set(), set()
-        current_rows.add(row)
-        current_cols |= rows[row]
+            bands.append(Band(current))
+            current = {}
+        current[row] = rows[row]
         previous = row
-    bands.append(Band(current_rows, current_cols))
+    bands.append(Band(current))
     return width, height, bands, rect, cursor
 
 
@@ -311,7 +324,7 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
     notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
 
     rect_left = min(x for x, _ in rect)
-    return notes, (left, top, pixels), (width, height), rect_left, sum_line.lit
+    return notes, (left, top, pixels), (width, height), rect_left, sum_line.ink
 
 
 def check_log() -> list[str]:
@@ -330,6 +343,9 @@ def check_log() -> list[str]:
         "sum 2^5 = 32",
         "sum IF 3>2 THEN 10 ELSE 20 = 10",
         "sum IF 2>3 THEN 10 ELSE 20 = 20",
+        "sum X=5 = 5",
+        "sum X+3 = 8",
+        "sum IF X>2 THEN 10 ELSE 20 = 10",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -343,8 +359,8 @@ def check_log() -> list[str]:
                 raise CheckFailed(f"{name} log never reported {phrase!r}")
         notes.append(
             f"{name} log: boot, message, rectangle, cursor, sum line, key "
-            f"{KEY_SENT} received, and the kernel's own answers for 12+30, 2^5 "
-            f"and both conditionals")
+            f"{KEY_SENT} received, and the kernel's own answers for 12+30, 2^5, "
+            f"both conditionals, and X stored then used twice")
     return notes
 
 
@@ -411,11 +427,12 @@ def main() -> int:
     try:
         notes, boot_cursor, size, rect_boot, sum_boot = check_screen(
             SCREEN_BOOT, M2_PROMPT)
-        key_notes, key_cursor, _, rect_key, _ = check_screen(SCREEN_KEY, M2_AFTER_KEY)
+        key_notes, key_cursor, _, rect_key, _ = check_screen(
+            SCREEN_KEY, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
         mouse_notes, moved_cursor, _, rect_mouse, _ = check_screen(
-            SCREEN_MOUSE, M2_AFTER_KEY)
+            SCREEN_MOUSE, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
         clamp_notes, clamped_cursor, _, rect_clamp, sum_clamp = check_screen(
-            SCREEN_CLAMP, M2_AFTER_KEY)
+            SCREEN_CLAMP, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
         typed_notes, _, _, rect_sum, sum_typed = check_screen(
             SCREEN_SUM, M6_AFTER_ENTER, M6_SUM)
         power_notes, _, _, rect_power, sum_power = check_screen(
@@ -424,8 +441,15 @@ def main() -> int:
             SCREEN_TRUE, M6_AFTER_ENTER, M7_TRUE)
         false_notes, _, _, rect_false, sum_false = check_screen(
             SCREEN_FALSE, M6_AFTER_ENTER, M7_FALSE)
+        assign_notes, _, _, rect_assign, sum_assign = check_screen(
+            SCREEN_ASSIGN, M6_AFTER_ENTER, M8_ASSIGN)
+        var_notes, _, _, rect_var, sum_var = check_screen(
+            SCREEN_VAR, M6_AFTER_ENTER, M8_VAR)
+        varif_notes, _, _, rect_varif, sum_varif = check_screen(
+            SCREEN_VARIF, M6_AFTER_ENTER, M8_VARIF)
         notes += (key_notes + mouse_notes + clamp_notes + typed_notes + power_notes
-                  + true_notes + false_notes)
+                  + true_notes + false_notes + assign_notes + var_notes
+                  + varif_notes)
 
         if sum_typed == sum_clamp:
             raise CheckFailed(
@@ -438,7 +462,7 @@ def main() -> int:
                 "one should have replaced the first"
             )
         notes.append(
-            f"  M6 sum line changed from {sum_clamp} lit columns to {sum_typed} "
+            f"  M6 sum line changed from {sum_clamp} lit pixels to {sum_typed} "
             f"after typing {M6_SUM.split('=')[0]}, then to {sum_power} after "
             f"{M6_POWER.split('=')[0]}, which needs a shifted key")
 
@@ -452,7 +476,24 @@ def main() -> int:
             )
         notes.append(
             f"  M7 conditionals drew different lines, {sum_true} and {sum_false} "
-            f"lit columns: {M7_TRUE} and {M7_FALSE}")
+            f"lit pixels: {M7_TRUE} and {M7_FALSE}")
+
+        # X=5=5 and X+3=8 are both five glyphs with no spaces, so glyph
+        # counting alone cannot tell them apart. What they draw must differ.
+        if sum_assign == sum_var:
+            raise CheckFailed(
+                "storing X and then using it drew the same line; the second "
+                "line should show the sum and its answer, not the assignment"
+            )
+        if sum_varif == sum_true:
+            raise CheckFailed(
+                "the conditional using X drew the same line as the one using 3; "
+                "they differ by a character, so they should differ on screen"
+            )
+        notes.append(
+            f"  M8 stored {M8_ASSIGN.split('=')[0]}=5, then used it on later "
+            f"lines: {M8_VAR} and {M8_VARIF}, {sum_assign}, {sum_var} and "
+            f"{sum_varif} lit pixels")
 
         if key_cursor[:2] != boot_cursor[:2]:
             raise CheckFailed("the cursor moved on its own before the mouse was touched")
@@ -460,7 +501,7 @@ def main() -> int:
         notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
         notes += check_rectangle_movement(
             [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power,
-             rect_true, rect_false], size)
+             rect_true, rect_false, rect_assign, rect_var, rect_varif], size)
         notes += check_log()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -468,9 +509,9 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M7 checks passed: message, key press, a moving rectangle, a cursor "
-          "that follows the mouse, sums answered, and a conditional taking each "
-          "branch in turn")
+    print("M1 to M8 checks passed: message, key press, a moving rectangle, a cursor "
+          "that follows the mouse, sums answered, a conditional taking each "
+          "branch in turn, and a value remembered under a name and used again")
     print("A person should still watch it boot once with make run.")
     return 0
 

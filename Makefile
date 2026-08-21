@@ -200,20 +200,26 @@ $(BUILD)/timer_rect_test: tests/timer_rect_test.c kernel/src/timer.c kernel/src/
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c -o $@
 
-$(BUILD)/calc_test: tests/calc_test.c kernel/src/calc.c
+$(BUILD)/calc_test: tests/calc_test.c kernel/src/calc.c kernel/src/vars.c
 	@mkdir -p $(BUILD)
-	$(CC) $(HOST_TEST_FLAGS) tests/calc_test.c kernel/src/calc.c -o $@
+	$(CC) $(HOST_TEST_FLAGS) \
+		tests/calc_test.c kernel/src/calc.c kernel/src/vars.c -o $@
+
+$(BUILD)/vars_test: tests/vars_test.c kernel/src/vars.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/vars_test.c kernel/src/vars.c -o $@
 
 $(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c -o $@
 
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
-           $(BUILD)/calc_test $(BUILD)/kbd_test
+           $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
 	$(BUILD)/calc_test
+	$(BUILD)/vars_test
 	$(BUILD)/kbd_test
 
 # Headless boot that captures the screen and checks it, no display needed.
