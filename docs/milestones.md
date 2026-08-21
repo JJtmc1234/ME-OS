@@ -32,7 +32,8 @@ Nothing here has been booted on a physical machine yet.
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
-worse than taking them out of order. M9 is still the next one to build.
+worse than taking them out of order. It was therefore built before M9, and M10
+is next, so the ladder is still walked in order from here.
 
 After M11, simple game like milestones come next, exercising input, timing and
 drawing together, before any deeper operating system work such as memory
