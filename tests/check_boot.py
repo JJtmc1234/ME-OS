@@ -279,8 +279,15 @@ def check_line(band: Band, text: str, label: str, name: str) -> str:
 
 
 def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
-                    key_line: Band, name: str) -> str:
-    """The M3 rectangle: solid, the expected size, centred, clear of the text."""
+                    key_line: Band, name: str,
+                    cursor: set[tuple[int, int]] | None = None) -> str:
+    """The M3 rectangle: solid, the expected size, and clear of the text.
+
+    Solid except where the cursor is on top of it. Before M9 the rectangle only
+    ever slid along one line and never met the cursor; now it can be steered
+    underneath it, and the cursor is drawn last, so the hole it leaves is the
+    system working. Anything missing outside the cursor is not.
+    """
     if not rect:
         raise CheckFailed(f"{name}: the M3 rectangle is missing")
 
@@ -290,10 +297,32 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
     actual_w, actual_h = right - left + 1, bottom - top + 1
 
     if len(rect) != actual_w * actual_h:
-        raise CheckFailed(
-            f"{name}: the rectangle has holes, {len(rect)} pixels inside a "
-            f"{actual_w}x{actual_h} box"
-        )
+        # One pixel of margin around the cursor, for the black outline drawn
+        # just outside the arrow.
+        if cursor:
+            cursor_left = min(x for x, _ in cursor) - 1
+            cursor_right = max(x for x, _ in cursor) + 1
+            cursor_top = min(y for _, y in cursor) - 1
+            cursor_bottom = max(y for _, y in cursor) + 1
+        else:
+            cursor_left = cursor_right = cursor_top = cursor_bottom = None
+
+        missing = [
+            (x, y)
+            for y in range(top, bottom + 1)
+            for x in range(left, right + 1)
+            if (x, y) not in rect
+        ]
+        stray = [
+            (x, y) for x, y in missing
+            if cursor_left is None
+            or not (cursor_left <= x <= cursor_right and cursor_top <= y <= cursor_bottom)
+        ]
+        if stray:
+            raise CheckFailed(
+                f"{name}: the rectangle has {len(stray)} holes in it that the cursor "
+                f"does not explain, the first at {stray[0]}"
+            )
 
     expected_w = width // RECT_WIDTH_DIVISOR
     expected_h = height // RECT_HEIGHT_DIVISOR
@@ -311,7 +340,10 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
         raise CheckFailed(f"{name}: the rectangle overlaps or sits above the key line")
     if right >= width or bottom >= height:
         raise CheckFailed(f"{name}: the rectangle runs off the screen")
-    return f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and on screen"
+    covered = actual_w * actual_h - len(rect)
+    behind = f", {covered} pixels behind the cursor" if covered else ""
+    return (f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and on "
+            f"screen{behind}")
 
 
 def cursor_corner(cursor: set[tuple[int, int]], name: str) -> tuple[int, int, int]:
@@ -393,7 +425,7 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
     if key_line.top <= message.bottom:
         raise CheckFailed(f"{path.name}: the key line is not below the M1 message")
     notes.append("  M1 message centred, key line below it")
-    notes.append("  " + check_rectangle(rect, width, height, key_line, path.name))
+    notes.append("  " + check_rectangle(rect, width, height, key_line, path.name, cursor))
 
     left, top, pixels = cursor_corner(cursor, path.name)
     if left >= width or top >= height:
