@@ -213,6 +213,26 @@ static int64_t pow_checked(int64_t base, int64_t exponent, bool *ok)
         return 0;
     }
 
+    /* A base of 0, 1 or -1 is answered here rather than by multiplying. The loop
+     * below stops only when the product overflows, and these three never do, so
+     * 1^9223372036854775807 ran the exponent out to the end. That is about 9.2
+     * quintillion multiplications with interrupts masked, which is not a slow
+     * calculator, it is a kernel that never comes back and needs a hard reset.
+     *
+     * With those out of the way the base is at least two in magnitude, so the
+     * product at least doubles every turn and overflows within 63 turns. The loop
+     * is bounded by that, and now it is bounded for every input rather than for
+     * most of them. */
+    if (base == 0) {
+        return exponent == 0 ? 1 : 0;   /* zero to the zero is one, as above */
+    }
+    if (base == 1) {
+        return 1;
+    }
+    if (base == -1) {
+        return (exponent % 2 == 0) ? 1 : -1;
+    }
+
     int64_t result = 1;
     for (int64_t i = 0; i < exponent; i++) {
         result = mul_checked(result, base, ok);
@@ -583,6 +603,17 @@ bool calc_key(struct calc *calc, char key)
         return false;
     }
 
+    /* Typing after a result starts a new sum rather than editing the old one.
+     *
+     * Before the two operator rule, not after it. The rule reads the last character
+     * of the line, and a finished line is not the line being typed. So after 5+
+     * and enter, which shows ERROR, pressing an operator was judged against the +
+     * still sitting there and refused. The key did nothing, the screen did not
+     * change, and there was no sign it had been seen at all. */
+    if (calc->has_result || calc->error) {
+        calc_reset(calc);
+    }
+
     /* Two operators in a row are only allowed when the second is a sign, so
      * 5*-3 can be typed but 5**3 cannot. */
     if (is_operator(key) && calc->length > 0) {
@@ -590,11 +621,6 @@ bool calc_key(struct calc *calc, char key)
         if (is_operator(last) && !(is_sign(key) && !is_sign(last))) {
             return false;
         }
-    }
-
-    /* Typing after a result starts a new sum rather than editing the old one. */
-    if (calc->has_result || calc->error) {
-        calc_reset(calc);
     }
 
     calc->text[calc->length++] = key;

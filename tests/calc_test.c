@@ -124,6 +124,21 @@ static void test_powers(void)
     check(refuses("2^-1"), "a negative power");
     check(refuses("1^-1"), "even where the answer would be whole");
 
+    /* These three hung the kernel rather than failing. `pow_checked` stopped only
+     * when the product overflowed, and a base of 0, 1 or -1 never overflows, so the
+     * loop ran the whole exponent out with interrupts masked. Typing 21 characters
+     * on the calculator line was enough. If this ever regresses the suite stops
+     * here and never finishes, which is the same symptom the kernel had. */
+    printf("a huge exponent is answered rather than counted out\n");
+    check(evaluates("1^9223372036854775807", 1), "one to an enormous power");
+    check(evaluates("0^9223372036854775807", 0), "zero to an enormous power");
+    check(evaluates("1^0", 1), "and the small cases still hold");
+
+    /* A leading minus binds looser than the power, so -1^N is -(1^N) and the base
+     * is one rather than minus one. The only way to hand this a base of minus one
+     * is through a name, so that is where the odd and even cases are checked. */
+    check(evaluates("-1^9223372036854775806", -1), "a leading minus is not part of the base");
+
     printf("a power that would not fit is refused\n");
     check(refuses("2^63"), "just past the largest value");
     check(refuses("10^19"), "a power of ten too large to hold");
@@ -219,6 +234,22 @@ static void test_variables(void)
     check(refuses_in(&env, "Q+1"), "using one in a sum");
     check(refuses(  "X"), "and with no table at all, every name is unknown");
 
+    /* The only route to a base of minus one, since there are no parentheses and a
+     * leading minus binds looser than the power. Without the closed form these run
+     * the exponent out with interrupts masked and the kernel never comes back. */
+    printf("a name holding minus one is raised without counting the exponent out\n");
+    check(evaluates_in(&env, "N=0-1", -1), "N is minus one");
+    check(evaluates_in(&env, "N^2", 1), "an even power is one");
+    check(evaluates_in(&env, "N^3", -1), "an odd power is minus one");
+    check(evaluates_in(&env, "N^0", 1), "to the power of zero is one");
+    check(evaluates_in(&env, "N^9223372036854775806", 1), "an enormous even power");
+    check(evaluates_in(&env, "N^9223372036854775807", -1), "an enormous odd power");
+
+    check(evaluates_in(&env, "Z=0", 0), "Z is zero");
+    check(evaluates_in(&env, "Z^9223372036854775807", 0), "zero to an enormous power");
+    check(evaluates_in(&env, "O=1", 1), "O is one");
+    check(evaluates_in(&env, "O^9223372036854775807", 1), "one to an enormous power");
+
     printf("names work anywhere a number works\n");
     check(evaluates_in(&env, "X+3", 10), "on the left of a sum");
     check(evaluates_in(&env, "3+X", 10), "on the right");
@@ -310,6 +341,32 @@ static void test_typing_variables(void)
     type(&calc, "X");
     calc_key(&calc, CALC_EVALUATE);
     check(line_is(&calc, "X=5"), "X is still 5");
+
+    /* The two operator rule used to be applied before the finished line was cleared,
+     * so it judged the key against a line that was no longer being typed. After a
+     * line ending in an operator the next operator key did nothing at all: not
+     * refused with a message, just silently dropped. */
+    printf("an operator starts a new line after a result or an error\n");
+    calc_key(&calc, CALC_CLEAR);
+    type(&calc, "5+");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "5+=ERROR"), "a line ending in an operator is an error");
+    type(&calc, "-");
+    check(line_is(&calc, "-"), "and the next operator key starts a fresh line");
+
+    calc_key(&calc, CALC_CLEAR);
+    type(&calc, "2*3");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "2*3=6"), "a line that worked");
+    type(&calc, "-4");
+    check(line_is(&calc, "-4"), "typing after a result still starts a new sum");
+    calc_key(&calc, CALC_EVALUATE);
+    check(line_is(&calc, "-4=-4"), "and the new sum evaluates on its own");
+
+    calc_key(&calc, CALC_CLEAR);
+    type(&calc, "5**");
+    check(line_is(&calc, "5*"), "two operators in a row are still refused mid line");
+    calc_key(&calc, CALC_CLEAR);
 
     printf("an unknown name shows an error rather than a wrong answer\n");
     type(&calc, "Q+1");
