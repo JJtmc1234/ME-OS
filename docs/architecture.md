@@ -38,7 +38,7 @@ references them and `--gc-sections` would otherwise discard them.
 | `pointer.c` | where the pointer is, and clamping it to the screen |
 | `cursor.c` | drawing the cursor, and putting back what it covered |
 | `timer.c` | elapsed time, polled from the programmable interval timer |
-| `rect.c` | where the moving rectangle is, given how much time has passed |
+| `rect.c` | rectangle timing, wrapping, hit testing and pointer-drag state |
 | `calc.c` | parsing and evaluating a typed sum, conditional or assignment, with checked arithmetic |
 | `vars.c` | a fixed table of eight named whole numbers |
 | `fpu.c` | turning SSE on, and nothing else: no arithmetic lives here |
@@ -59,11 +59,13 @@ mouse are polled. The controller's status register says which device a waiting
 byte came from, so the two share one port without stealing each other's bytes.
 An IDT arrives when a milestone actually needs it.
 
-**Input is split three ways.** `mouse.c` talks to the hardware and assembles
-packets, `pointer.c` holds the position and clamps it, `cursor.c` draws it.
-A second input device would touch only the first of those, and a different
-cursor only the last. Decoding and clamping are pure functions, which is why
-both can be tested on an ordinary machine.
+**Input state is separate from input effects.** `mouse.c` talks to the hardware
+and assembles packets, `pointer.c` holds the position and clamps it, and
+`cursor.c` draws it. `main.c` currently routes a left-button edge to the pure
+hit-test and drag state in `rect.c`; the device driver does not know what a
+rectangle is. A second input device would touch only the first layer, and a
+different cursor only the last. Decoding, clamping, hit testing and dragging
+are pure functions tested on an ordinary machine.
 
 **Arithmetic refuses rather than wraps.** Every operation in `calc.c` is
 checked before it happens: addition and subtraction against the limits,
@@ -123,23 +125,19 @@ hardware. COM1 at `0x3F8` is a real serial port, so the same log will be visible
 on a physical machine or through `qemu -serial`. Serial writes spin a bounded
 number of times, so a missing UART cannot hang the boot.
 
-**Drawing is direct.** No console, no scrolling, no cursor, no input buffer.
-`main.c` decides where each line goes and redraws the line it owns.
+**Drawing is direct.** There is no console, scrolling, off-screen surface or
+input event buffer yet. `main.c` decides where each element goes and redraws
+the region it owns. M13 onward replaces this with window-owned state, surfaces
+and routed events in small steps.
 
 ## Testing without a screen
 
 `make test` runs `scripts/boot-capture.sh`, which boots the ISO with no display,
-captures the framebuffer through the QEMU monitor, injects a key press with
-`sendkey`, captures again, and quits. `tests/check_boot.py` then reads both
-captures as pixel data and asserts:
-
-- every pixel is black or white
-- there are exactly two lines of text
-- the first line has the right number of glyphs for the M1 message and is
-  centred on the screen
-- the second line reads `PRESS A KEY` before input and reports the injected key
-  afterwards
-- both log sinks report a clean boot, a keyboard, and the key that was sent
+captures the framebuffer through the QEMU monitor, injects keyboard and mouse
+input, and quits. `tests/check_boot.py` reads the captures as pixel data and
+checks every completed visual milestone: text, arithmetic, the cursor, timed
+movement, steering, wrapping, dragging and the rotating triangle. It also
+checks both log sinks for the kernel's own record of those actions.
 
 That is a real check of what the kernel drew, not just that it compiled. It
 still does not replace a person watching it boot once.

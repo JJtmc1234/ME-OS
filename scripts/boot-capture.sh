@@ -18,6 +18,9 @@
 #   screen-varif.ppm  that name used in a conditional on a later line
 #   screen-wrap-down.ppm the steered rectangle after crossing its lower edge
 #   screen-wrap-left.ppm the steered rectangle after crossing its left edge
+#   screen-drag-ready.ppm pointer placed inside the rectangle before pressing
+#   screen-drag-held.ppm  pointer and rectangle moved while left is held
+#   screen-drag-release.ppm pointer moved again after releasing the rectangle
 #   debug.log         kernel log via QEMU's debug port
 #   serial.log        the same log via COM1, which real hardware also has
 #
@@ -59,6 +62,9 @@ SHOT_STEER_DOWN="${SHOT_STEER_DOWN:-$BUILD_DIR/screen-steer-down.ppm}"
 SHOT_STEER_LEFT="${SHOT_STEER_LEFT:-$BUILD_DIR/screen-steer-left.ppm}"
 SHOT_WRAP_DOWN="${SHOT_WRAP_DOWN:-$BUILD_DIR/screen-wrap-down.ppm}"
 SHOT_WRAP_LEFT="${SHOT_WRAP_LEFT:-$BUILD_DIR/screen-wrap-left.ppm}"
+SHOT_DRAG_READY="${SHOT_DRAG_READY:-$BUILD_DIR/screen-drag-ready.ppm}"
+SHOT_DRAG_HELD="${SHOT_DRAG_HELD:-$BUILD_DIR/screen-drag-held.ppm}"
+SHOT_DRAG_RELEASE="${SHOT_DRAG_RELEASE:-$BUILD_DIR/screen-drag-release.ppm}"
 # M9. Three presses down and eight left, so the checker can look for exactly
 # three and exactly eight steps rather than just "it moved".
 STEER_DOWN_KEYS="${STEER_DOWN_KEYS:-down down down}"
@@ -111,6 +117,9 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_STEER_LEFT"
 : > "$SHOT_WRAP_DOWN"
 : > "$SHOT_WRAP_LEFT"
+: > "$SHOT_DRAG_READY"
+: > "$SHOT_DRAG_HELD"
+: > "$SHOT_DRAG_RELEASE"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -215,6 +224,38 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_WRAP_LEFT"
     sleep 2
+    # M11. Pin the pointer at the top-left first, then put it at a known point
+    # inside the wrapped rectangle. Small packets avoid the PS/2 overflow bits.
+    for ((move = 0; move < 20; move++)); do
+        echo "mouse_move -100 -100"
+        sleep 0.05
+    done
+    for ((move = 0; move < 5; move++)); do
+        echo "mouse_move 100 100"
+        sleep 0.05
+    done
+    for ((move = 0; move < 3; move++)); do
+        echo "mouse_move 100 0"
+        sleep 0.05
+    done
+    echo "mouse_move 0 20"
+    sleep 2
+    echo "screendump $SHOT_DRAG_READY"
+    sleep 2
+    echo "mouse_button 1"
+    sleep "$TYPE_DELAY"
+    echo "mouse_move -90 15"
+    sleep "$TYPE_DELAY"
+    echo "mouse_move -90 15"
+    sleep 2
+    echo "screendump $SHOT_DRAG_HELD"
+    sleep 2
+    echo "mouse_button 0"
+    sleep "$TYPE_DELAY"
+    echo "mouse_move 80 0"
+    sleep 2
+    echo "screendump $SHOT_DRAG_RELEASE"
+    sleep 2
     echo "quit"
 } | "$QEMU" \
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
@@ -240,6 +281,9 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_STEER_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_STEER_LEFT"
 [ -s "$SHOT_WRAP_DOWN" ] || fail "QEMU produced no screenshot at $SHOT_WRAP_DOWN"
 [ -s "$SHOT_WRAP_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_WRAP_LEFT"
+[ -s "$SHOT_DRAG_READY" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_READY"
+[ -s "$SHOT_DRAG_HELD" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_HELD"
+[ -s "$SHOT_DRAG_RELEASE" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_RELEASE"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
@@ -252,3 +296,4 @@ if [ -s "$DEBUG_LOG" ]; then
 fi
 echo "boot-capture: steered the rectangle with $STEER_DOWN_KEYS then $STEER_LEFT_KEYS"
 echo "boot-capture: wrapped it with down then $WRAP_LEFT_PRESSES presses of left"
+echo "boot-capture: dragged the rectangle -180 30, released it, then moved the pointer 80 0"

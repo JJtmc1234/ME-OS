@@ -112,3 +112,82 @@ bool rect_advance(struct moving_rect *rect, uint64_t elapsed, uint64_t hz,
     rect->x = moved;
     return rect->x != before;
 }
+
+bool rect_contains(const struct moving_rect *rect, int64_t x, int64_t y)
+{
+    if (rect == NULL || rect->width == 0 || rect->height == 0 ||
+        x < rect->x || y < rect->y) {
+        return false;
+    }
+
+    const uint64_t across = (uint64_t)x - (uint64_t)rect->x;
+    const uint64_t down = (uint64_t)y - (uint64_t)rect->y;
+    return across < rect->width && down < rect->height;
+}
+
+void rect_drag_reset(struct rect_drag *drag)
+{
+    if (drag != NULL) {
+        drag->active = false;
+        drag->offset_x = 0;
+        drag->offset_y = 0;
+    }
+}
+
+bool rect_drag_begin(struct rect_drag *drag, const struct moving_rect *rect,
+                     int64_t pointer_x, int64_t pointer_y)
+{
+    if (drag == NULL || drag->active ||
+        !rect_contains(rect, pointer_x, pointer_y)) {
+        return false;
+    }
+
+    const uint64_t across = (uint64_t)pointer_x - (uint64_t)rect->x;
+    const uint64_t down = (uint64_t)pointer_y - (uint64_t)rect->y;
+    if (across > (uint64_t)INT64_MAX || down > (uint64_t)INT64_MAX) {
+        return false;
+    }
+
+    drag->active = true;
+    drag->offset_x = (int64_t)across;
+    drag->offset_y = (int64_t)down;
+    return true;
+}
+
+static int64_t subtract_saturated(int64_t value, int64_t amount)
+{
+    if (amount > 0 && value < INT64_MIN + amount) {
+        return INT64_MIN;
+    }
+    if (amount < 0 && value > INT64_MAX + amount) {
+        return INT64_MAX;
+    }
+    return value - amount;
+}
+
+bool rect_drag_move(const struct rect_drag *drag, struct moving_rect *rect,
+                    int64_t pointer_x, int64_t pointer_y,
+                    uint64_t screen_width, int64_t min_y, int64_t max_y)
+{
+    if (drag == NULL || !drag->active || rect == NULL ||
+        rect->width == 0 || rect->width > screen_width ||
+        screen_width > (uint64_t)INT64_MAX) {
+        return false;
+    }
+
+    const int64_t before_x = rect->x;
+    const int64_t before_y = rect->y;
+    const int64_t max_x = (int64_t)(screen_width - rect->width);
+    rect->x = clamp(subtract_saturated(pointer_x, drag->offset_x), 0, max_x);
+    rect->y = clamp(subtract_saturated(pointer_y, drag->offset_y), min_y, max_y);
+    return rect->x != before_x || rect->y != before_y;
+}
+
+bool rect_drag_end(struct rect_drag *drag)
+{
+    if (drag == NULL || !drag->active) {
+        return false;
+    }
+    rect_drag_reset(drag);
+    return true;
+}

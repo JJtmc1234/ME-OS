@@ -211,12 +211,76 @@ static void test_rect_nudge(void)
     check(rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y), "but can still be steered");
 }
 
+static void test_rect_drag(void)
+{
+    const int64_t min_y = 500, max_y = 569;
+    struct moving_rect r = make_rect(400, 1);
+    r.y = 520;
+
+    printf("rectangle hit testing includes its pixels and excludes its edges\n");
+    check(rect_contains(&r, 400, 520), "top-left pixel is inside");
+    check(rect_contains(&r, 719, 576), "bottom-right pixel is inside");
+    check(!rect_contains(&r, 720, 520), "right edge is outside");
+    check(!rect_contains(&r, 400, 577), "bottom edge is outside");
+    check(!rect_contains(&r, 399, 520), "left of it is outside");
+    check(!rect_contains(NULL, 400, 520), "no rectangle contains nothing");
+    struct moving_rect empty = r;
+    empty.height = 0;
+    check(!rect_contains(&empty, 400, 520), "an empty rectangle contains nothing");
+
+    printf("a drag begins only on the rectangle and remembers the press offset\n");
+    struct rect_drag drag = { .active = true, .offset_x = 99, .offset_y = 99 };
+    rect_drag_reset(&drag);
+    check(!drag.active && drag.offset_x == 0 && drag.offset_y == 0, "reset is empty");
+    check(!rect_drag_begin(&drag, &r, 100, 100) && !drag.active,
+          "pressing the background does not begin a drag");
+    check(rect_drag_begin(&drag, &r, 450, 530), "pressing inside begins a drag");
+    check(drag.active && drag.offset_x == 50 && drag.offset_y == 10,
+          "the point picked up is retained");
+    check(!rect_drag_begin(&drag, &r, 460, 540), "a held button cannot restart the drag");
+    check(r.x == 400 && r.y == 520, "beginning does not snap the rectangle");
+
+    printf("the rectangle follows the pointer and keeps that offset\n");
+    check(rect_drag_move(&drag, &r, 500, 550, SCREEN_W, min_y, max_y),
+          "moving the held pointer moves the rectangle");
+    check(r.x == 450 && r.y == 540, "the press offset is preserved");
+    check(!rect_drag_move(&drag, &r, 500, 550, SCREEN_W, min_y, max_y),
+          "the same pointer position is not a redraw");
+
+    printf("dragging clamps the whole rectangle to its safe area\n");
+    check(rect_drag_move(&drag, &r, INT64_MIN, INT64_MIN,
+                         SCREEN_W, min_y, max_y), "a far top-left move is handled");
+    check(r.x == 0 && r.y == min_y, "the rectangle stays at the top-left bounds");
+    check(rect_drag_move(&drag, &r, INT64_MAX, INT64_MAX,
+                         SCREEN_W, min_y, max_y), "a far bottom-right move is handled");
+    check(r.x == SCREEN_W - 320 && r.y == max_y,
+          "the rectangle stays at the bottom-right bounds");
+
+    printf("release ends the drag\n");
+    check(rect_drag_end(&drag) && !drag.active, "the active drag ends");
+    check(!rect_drag_end(&drag), "a second release does nothing");
+    check(!rect_drag_move(&drag, &r, 600, 540, SCREEN_W, min_y, max_y),
+          "movement after release does not move the rectangle");
+
+    printf("dragging refuses invalid state safely\n");
+    check(!rect_drag_begin(NULL, &r, r.x, r.y), "nowhere to retain a drag");
+    check(!rect_drag_begin(&drag, NULL, r.x, r.y), "no rectangle to pick up");
+    check(!rect_drag_move(NULL, &r, 0, 0, SCREEN_W, min_y, max_y), "no drag state");
+    drag.active = true;
+    struct moving_rect huge = r;
+    huge.width = SCREEN_W + 1;
+    check(!rect_drag_move(&drag, &huge, 0, 0, SCREEN_W, min_y, max_y),
+          "a rectangle wider than the screen is left alone");
+    check(!rect_drag_end(NULL), "releasing no drag is safe");
+}
+
 int main(void)
 {
     test_timer_wrap();
     test_rect_movement();
     test_rect_stays_on_screen();
     test_rect_nudge();
+    test_rect_drag();
 
     if (failures > 0) {
         printf("\n%d timer or rectangle check(s) FAILED\n", failures);

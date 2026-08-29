@@ -28,9 +28,10 @@ to a disk or a USB device.
 | M12 rotating triangle and floating point | SSE turned on deliberately, and a triangle turning on a timer | Verified software milestone, QEMU |
 | M9 keyboard controlled rectangle | The arrow keys steer the rectangle | Verified software milestone, QEMU |
 | M10 edge wrapping | Arrow-key movement wraps at all four corridor edges | Verified software milestone, QEMU |
-| M11 click and drag rectangle | The rectangle follows the pointer while held | Next |
+| M11 click and drag rectangle | The rectangle follows the pointer while held | Verified software milestone, QEMU |
+| M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Next |
 
-All eleven finished milestones are checked automatically. `make test` boots the image
+All twelve finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -99,6 +100,11 @@ top and bottom of the safe vertical corridor. The rectangle stays whole and
 on screen, and the part of a step beyond an edge is preserved at the opposite
 edge. M5's time-driven movement still bounces, because M10 changes deliberate
 steering rather than rewriting the earlier behaviour.
+
+**M11.** Holding the left mouse button inside the rectangle picks it up. The
+press offset is preserved, so it follows the pointer without snapping, and the
+whole rectangle stays inside its safe corridor. Releasing drops it; subsequent
+pointer movement leaves it behind. Clicking the background does nothing.
 
 **M12.** A triangle turns about its own centre, below everything else on the
 screen, at a fixed speed driven by the same clock the rectangle uses. It is

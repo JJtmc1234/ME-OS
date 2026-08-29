@@ -14,6 +14,7 @@
  * M12: turn a triangle about its own centre, using floating point.
  * M9: steer the rectangle with the arrow keys.
  * M10: wrap the steered rectangle at each edge of its safe corridor.
+ * M11: pick the rectangle up with the left mouse button and drag it.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -113,6 +114,8 @@ static struct vars vars_state;
 static uint32_t colour_cursor;
 static struct pointer pointer_state;
 static struct moving_rect rect_state;
+static struct rect_drag rect_drag_state;
+static bool mouse_left_down;
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -452,8 +455,8 @@ void kmain(void)
     kbd_init();
     log_stage("keyboard ready, waiting for keys");
 
-    /* M4: a cursor the pointer state drives. No dragging, nothing follows it,
-     * and it moves nothing on the screen. */
+    /* M4: a cursor the pointer state drives. M11 later uses the same pointer
+     * state for dragging without making the mouse driver a drawing API. */
     pointer_init(&pointer_state,
                  (int64_t)(fb_width() / M4_CURSOR_START_X_DIVISOR),
                  (int64_t)(fb_height() / M4_CURSOR_START_Y_DIVISOR),
@@ -465,6 +468,8 @@ void kmain(void)
     } else {
         log_stage("no mouse answered, the cursor will not move");
     }
+    rect_drag_reset(&rect_drag_state);
+    mouse_left_down = false;
 
     /* M5: a clock, so the rectangle moves at a rate rather than at whatever
      * speed this machine happens to run the loop. */
@@ -574,8 +579,37 @@ void kmain(void)
         }
 
         if (mouse_poll(&movement)) {
-            if (pointer_move(&pointer_state, movement.dx, movement.dy,
-                             fb_width(), fb_height())) {
+            const bool pointer_changed =
+                pointer_move(&pointer_state, movement.dx, movement.dy,
+                             fb_width(), fb_height());
+            const bool pressed = movement.left && !mouse_left_down;
+            const bool released = !movement.left && mouse_left_down;
+            bool rectangle_changed = false;
+
+            if (pressed && rect_drag_begin(&rect_drag_state, &rect_state,
+                                           pointer_state.x, pointer_state.y)) {
+                rect_state.speed = 0;
+                log_stage("rectangle drag started");
+            }
+            if (movement.left && rect_drag_state.active) {
+                rectangle_changed = rect_drag_move(
+                    &rect_drag_state, &rect_state,
+                    pointer_state.x, pointer_state.y,
+                    fb_width(), rect_min_y, rect_max_y);
+            }
+            if (released && rect_drag_end(&rect_drag_state)) {
+                log_stage("rectangle drag ended");
+            }
+            mouse_left_down = movement.left;
+
+            if (rectangle_changed) {
+                draw_rect();
+                log_str("me-os: rectangle dragged to ");
+                log_dec((uint64_t)rect_state.x);
+                log_str(",");
+                log_dec((uint64_t)rect_state.y);
+                log_str("\n");
+            } else if (pointer_changed) {
                 cursor_hide();
                 cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
                             colour_cursor, colour_background);

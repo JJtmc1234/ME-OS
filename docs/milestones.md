@@ -27,17 +27,24 @@ Nothing here has been booted on a physical machine yet.
 | M8 | Variables | Stores and updates named values, and shows them changing | Verified software milestone |
 | M9 | Keyboard controlled rectangle | The arrow keys move the rectangle, which stops drifting once it is being steered | Verified software milestone |
 | M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Verified software milestone |
-| M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Next |
+| M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Verified software milestone |
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
+| M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Next |
+| M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Planned |
+| M15 | Focus and event queues | Focused input is routed as bounded per-window events | Planned |
+| M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Planned |
+| M17 | Window resizing | Bounded live resizing with explicit surface semantics | Planned |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
-worse than taking them out of order. It was therefore built before M9, and M10
-is next, so the ladder is still walked in order from here.
+worse than taking them out of order. It was therefore built before M9. M9 to
+M11 are now complete without renumbering any of them.
 
-After M11, simple game like milestones come next, exercising input, timing and
-drawing together, before any deeper operating system work such as memory
-management, interrupts, processes or filesystems.
+The next direction is a small window system. The fixed pool in M13 is an
+explicit stepping stone because the kernel has no allocator yet; building a
+general heap only to claim dynamic windows would be a much larger subsystem.
+Filesystem, processes, networking, audio and hardware boot remain outside this
+sequence.
 
 ## What M9 added
 
@@ -74,6 +81,19 @@ This applies only to deliberate arrow-key movement. M5's time-driven motion
 still reflects at the horizontal edges, preserving that earlier milestone's
 behaviour. The wrap arithmetic takes constant time even for a very large step
 and is exercised with the largest signed inputs by the host tests.
+
+## What M11 added
+
+The left mouse button can pick up the filled rectangle. Hit testing includes
+the rectangle's drawn pixels and excludes the first pixel beyond each edge.
+The point pressed is retained as an offset, so the rectangle follows the
+pointer without snapping its top-left corner under it. It remains whole and is
+clamped to the same safe corridor used by arrow-key steering.
+
+Releasing the button ends the drag; later pointer movement leaves the rectangle
+where it was dropped. Pressing the background starts nothing. The mouse driver
+still only reports decoded device state: `main.c` translates the button edge
+into the pure hit-test and drag operations in `rect.c`.
 
 ## What M12 added
 
@@ -116,7 +136,7 @@ have actually moved.
 
 ## Verification status
 
-M1 to M10 and M12 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M12 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -133,8 +153,8 @@ Two kinds of test run:
   boundaries.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
-  what it stored, steers the rectangle across two edges, and inspects fifteen
-  captured framebuffers: the sum line,
+  what it stored, steers the rectangle across two edges, drags and releases it,
+  and inspects eighteen captured framebuffers: the sum line,
   the message, the key line, a rectangle that is whole, on screen and in a
   different place each time, and a cursor that starts in the right place,
   follows the mouse exactly, keeps its shape, and stays on screen.

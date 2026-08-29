@@ -20,6 +20,8 @@ milestones:
       presses say and stopping inside the corridor it is allowed
   M10 the steered rectangle wrapping across both corridor edges while remaining
       whole and on screen
+  M11 a press inside the rectangle preserving its offset while held, and a
+      pointer move after release leaving the rectangle behind
   M12 a triangle turning about its own centre, drawn with floating point:
       present in every capture, whole, on screen, and in a different position
       each time
@@ -55,6 +57,9 @@ SCREEN_STEER_DOWN = BUILD_DIR / "screen-steer-down.ppm"
 SCREEN_STEER_LEFT = BUILD_DIR / "screen-steer-left.ppm"
 SCREEN_WRAP_DOWN = BUILD_DIR / "screen-wrap-down.ppm"
 SCREEN_WRAP_LEFT = BUILD_DIR / "screen-wrap-left.ppm"
+SCREEN_DRAG_READY = BUILD_DIR / "screen-drag-ready.ppm"
+SCREEN_DRAG_HELD = BUILD_DIR / "screen-drag-held.ppm"
+SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
 SERIAL_LOG = BUILD_DIR / "serial.log"
 
@@ -464,6 +469,9 @@ def check_log() -> list[str]:
         "drew the M6 sum line",
         "the rectangle is being steered",
         "rectangle moved to",
+        "rectangle drag started",
+        "rectangle dragged to",
+        "rectangle drag ended",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -622,6 +630,47 @@ def check_wrapping(size) -> list[str]:
     ]
 
 
+def check_dragging(ready_cursor, held_cursor, released_cursor, size) -> list[str]:
+    """M11: the held rectangle follows the pointer, then stays on release."""
+    if len(RECTANGLES) < 3:
+        raise CheckFailed("not enough captures to tell whether dragging works")
+
+    ready, held, released = RECTANGLES[-3:]
+    width, height = size
+    rect_width = width // RECT_WIDTH_DIVISOR
+    rect_height = height // RECT_HEIGHT_DIVISOR
+    if not (ready[1] <= ready_cursor[0] < ready[1] + rect_width and
+            ready[2] <= ready_cursor[1] < ready[2] + rect_height):
+        raise CheckFailed(
+            f"the M11 press point {ready_cursor[:2]} is outside the rectangle at "
+            f"({ready[1]}, {ready[2]})")
+
+    pointer_delta = (held_cursor[0] - ready_cursor[0],
+                     held_cursor[1] - ready_cursor[1])
+    rectangle_delta = (held[1] - ready[1], held[2] - ready[2])
+    if pointer_delta != (-180, 30):
+        raise CheckFailed(
+            f"the held pointer moved {pointer_delta}, expected (-180, 30)")
+    if rectangle_delta != pointer_delta:
+        raise CheckFailed(
+            f"the pointer moved {pointer_delta} while the held rectangle moved "
+            f"{rectangle_delta}; the press offset was not preserved")
+
+    after_release = (released_cursor[0] - held_cursor[0],
+                     released_cursor[1] - held_cursor[1])
+    if after_release != (80, 0):
+        raise CheckFailed(
+            f"after release the pointer moved {after_release}, expected (80, 0)")
+    if released[1:] != held[1:]:
+        raise CheckFailed(
+            f"after release the rectangle moved from {held[1:]} to {released[1:]}")
+
+    return [
+        f"  M11 rectangle followed a held pointer by {pointer_delta}, preserving "
+        f"the press offset, then stayed at ({held[1]}, {held[2]}) after release",
+    ]
+
+
 def check_rotation() -> list[str]:
     """M12: the triangle turns, and turns about a fixed point.
 
@@ -753,6 +802,15 @@ def main() -> int:
             SCREEN_WRAP_LEFT, M2_AFTER_ARROW_LEFT, M8_VARIF)
         notes += wrap_down_notes + wrap_left_notes
         notes += check_wrapping(size)
+        drag_ready_notes, drag_ready_cursor, _, _, _ = check_screen(
+            SCREEN_DRAG_READY, M2_AFTER_ARROW_LEFT, M8_VARIF)
+        drag_held_notes, drag_held_cursor, _, _, _ = check_screen(
+            SCREEN_DRAG_HELD, M2_AFTER_ARROW_LEFT, M8_VARIF)
+        drag_release_notes, drag_release_cursor, _, _, _ = check_screen(
+            SCREEN_DRAG_RELEASE, M2_AFTER_ARROW_LEFT, M8_VARIF)
+        notes += drag_ready_notes + drag_held_notes + drag_release_notes
+        notes += check_dragging(
+            drag_ready_cursor, drag_held_cursor, drag_release_cursor, size)
         notes += check_rotation()
         notes += check_log()
     except CheckFailed as exc:
@@ -761,8 +819,8 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M10 and M12 checks passed: message, key press, a rectangle that "
-          "drifts, can be steered and wraps, a cursor that follows the mouse, sums "
+    print("M1 to M12 checks passed: message, key press, a rectangle that drifts, "
+          "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, and a triangle turning about its own centre")
     print("A person should still watch it boot once with make run.")
