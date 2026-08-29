@@ -37,6 +37,7 @@
 #include "rect.h"
 #include "timer.h"
 #include "vars.h"
+#include "window.h"
 
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
@@ -116,6 +117,9 @@ static struct pointer pointer_state;
 static struct moving_rect rect_state;
 static struct rect_drag rect_drag_state;
 static bool mouse_left_down;
+static struct window_manager window_manager;
+static WindowId demo_window_id;
+static WindowId system_window_id;
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -369,6 +373,28 @@ void kmain(void)
     log_str("x");
     log_dec(fb_height());
     log_str(" bpp 32\n");
+
+    /* M13: two real window objects, not yet used for drawing. M14 gives them
+     * surfaces and makes the compositor visible. Keeping creation here already
+     * exercises the same lifetime and stable-ID path the visible system uses. */
+    window_manager_init(&window_manager);
+    const struct window_spec demo_window = {
+        .geometry = { .x = 80, .y = 70, .width = 900, .height = 620 },
+        .title = "Demo",
+    };
+    const struct window_spec system_window = {
+        .geometry = { .x = 720, .y = 140, .width = 360, .height = 240 },
+        .title = "System",
+    };
+    if (!window_create(&window_manager, &demo_window, &demo_window_id) ||
+        !window_create(&window_manager, &system_window, &system_window_id)) {
+        fail("could not create the M13 window objects");
+    }
+    log_str("me-os: window model ready, created IDs ");
+    log_dec(demo_window_id);
+    log_str(" and ");
+    log_dec(system_window_id);
+    log_str("\n");
 
     colour_background = fb_rgb(0, 0, 0);
     colour_text = fb_rgb(255, 255, 255);

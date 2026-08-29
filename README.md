@@ -29,9 +29,10 @@ to a disk or a USB device.
 | M9 keyboard controlled rectangle | The arrow keys steer the rectangle | Verified software milestone, QEMU |
 | M10 edge wrapping | Arrow-key movement wraps at all four corridor edges | Verified software milestone, QEMU |
 | M11 click and drag rectangle | The rectangle follows the pointer while held | Verified software milestone, QEMU |
-| M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Next |
+| M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Verified software milestone, QEMU |
+| M14 window surfaces and compositor | Window-local drawing and ordered framebuffer composition | Next |
 
-All twelve finished milestones are checked automatically. `make test` boots the image
+All thirteen finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -105,6 +106,12 @@ steering rather than rewriting the earlier behaviour.
 press offset is preserved, so it follows the pointer without snapping, and the
 whole rectangle stays inside its safe corridor. Releasing drops it; subsequent
 pointer movement leaves it behind. Clicking the background does nothing.
+
+**M13.** Windows now exist as independent kernel objects with stable IDs,
+geometry, titles, lifetime and deterministic z-order. The current kernel has no
+allocator, so the manager uses a bounded pool of eight slots and fails safely
+when full. IDs are not slot numbers, which keeps this temporary storage choice
+out of callers. M14 gives the objects software surfaces and makes them visible.
 
 **M12.** A triangle turns about its own centre, below everything else on the
 screen, at a fixed speed driven by the same clock the rectangle uses. It is

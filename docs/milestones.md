@@ -29,8 +29,8 @@ Nothing here has been booted on a physical machine yet.
 | M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Verified software milestone |
 | M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Verified software milestone |
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
-| M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Next |
-| M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Planned |
+| M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Verified software milestone |
+| M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Next |
 | M15 | Focus and event queues | Focused input is routed as bounded per-window events | Planned |
 | M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Planned |
 | M17 | Window resizing | Bounded live resizing with explicit surface semantics | Planned |
@@ -125,6 +125,27 @@ The triangle sits below everything else and turns at 0.6 radians a second on
 the same clock the rectangle uses. It is redrawn only when its rounded corners
 have actually moved.
 
+## What M13 added
+
+`window.c` owns window lifetime and ordering. A window has a stable 32-bit ID,
+signed position, bounded non-zero size, title, and reserved focused/minimized
+state. IDs are not pool indexes: destroying a window invalidates that ID while
+leaving every other ID stable, and reusing its storage slot does not
+immediately reuse the ID.
+
+New windows enter at the top of an explicit bottom-to-top z-order. Raising one
+preserves every other relative order, destroying one closes only its gap, and
+hit testing walks from top to bottom while skipping minimized windows. Negative
+positions are valid so the compositor can later clip partially off-screen
+windows safely.
+
+There is deliberately no heap. The manager contains eight object slots and an
+explicit safe failure when full. All lifetime, lookup and ordering operations
+go through stable IDs, so replacing the temporary pool after a real allocator
+exists does not require app or compositor callers to depend on slot addresses.
+The kernel creates `Demo` and `System` objects through this path at boot; M14
+will give them surfaces and make them visible.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -150,7 +171,8 @@ Two kinds of test run:
   and refuse overflow, division by zero, fractional powers and malformed input,
   and that the variable table stores, overwrites, refuses a name too many and
   leaves itself alone when a line is refused. Seven host programs cover these
-  boundaries.
+  boundaries. An eighth program covers window IDs, object lifetime, geometry,
+  capacity, z-order and hit testing.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
   what it stored, steers the rectangle across two edges, drags and releases it,

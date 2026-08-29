@@ -43,6 +43,7 @@ references them and `--gc-sections` would otherwise discard them.
 | `vars.c` | a fixed table of eight named whole numbers |
 | `fpu.c` | turning SSE on, and nothing else: no arithmetic lives here |
 | `geometry.c` | sine, cosine, rotation and the turning triangle. The only file with floating point in it |
+| `window.c` | stable window IDs, bounded object lifetime, geometry, z-order and hit testing |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -113,6 +114,13 @@ the cursor keeps a copy of the pixels underneath and puts them back before it
 moves. Anything else that draws has to hide the cursor first, or that copy goes
 stale and the cursor smears the old picture back over the new one. That is one
 rule to remember, and it is why `draw_key_line` hides and reshows it.
+
+**Window identity is separate from storage.** M13 has no allocator to build on,
+so `window_manager` uses eight fixed slots. Callers never name those slots:
+they create, retrieve, raise and destroy windows through stable `WindowId`
+values and an explicit z-order. This is a bounded implementation stepping
+stone, not a claim that the kernel has dynamic memory. A future allocator can
+replace the storage without changing the public lifetime rules.
 
 **Framebuffer assumptions are checked, not assumed.** `fb_init` refuses a null
 address, a bits per pixel other than 32, a zero dimension, a pitch smaller than

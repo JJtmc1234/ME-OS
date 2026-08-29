@@ -460,6 +460,7 @@ def check_log() -> list[str]:
     notes = []
     expected = (
         "kernel entered",
+        "window model ready, created IDs 1 and 2",
         "drew the M1 message",
         "drew the M3 rectangle",
         "keyboard ready",

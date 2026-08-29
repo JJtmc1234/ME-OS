@@ -245,9 +245,13 @@ $(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/geometry_test.c kernel/src/geometry.c -o $@ -lm
 
+$(BUILD)/window_test: tests/window_test.c kernel/src/window.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/window_test.c kernel/src/window.c -o $@
+
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
            $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
-           $(BUILD)/geometry_test
+           $(BUILD)/geometry_test $(BUILD)/window_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -255,6 +259,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/vars_test
 	$(BUILD)/kbd_test
 	$(BUILD)/geometry_test
+	$(BUILD)/window_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
