@@ -27,9 +27,10 @@ to a disk or a USB device.
 | M8 variables | Named values that can be stored and changed | Verified software milestone, QEMU |
 | M12 rotating triangle and floating point | SSE turned on deliberately, and a triangle turning on a timer | Verified software milestone, QEMU |
 | M9 keyboard controlled rectangle | The arrow keys steer the rectangle | Verified software milestone, QEMU |
-| M10 edge wrapping | The rectangle wraps rather than stopping | Next |
+| M10 edge wrapping | Arrow-key movement wraps at all four corridor edges | Verified software milestone, QEMU |
+| M11 click and drag rectangle | The rectangle follows the pointer while held | Next |
 
-All ten finished milestones are checked automatically. `make test` boots the image
+All eleven finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -88,11 +89,16 @@ assignment.
 **M9.** The arrow keys move the rectangle, sixteen pixels a press. The first
 press stops it drifting, because steering something that is also wandering off
 on its own is a nuisance. It moves within a corridor between the key line and
-the triangle, so it cannot rub out text or part of the turning shape, and it
-stops at the edges rather than wrapping. Wrapping is M10.
+the triangle, so it cannot rub out text or part of the turning shape.
 
 Arrows rather than WASD: since M8 every letter is part of a typed sum, so
 letters would steer and type at the same time.
+
+**M10.** Arrow-key movement wraps at the horizontal screen edges and at the
+top and bottom of the safe vertical corridor. The rectangle stays whole and
+on screen, and the part of a step beyond an edge is preserved at the opposite
+edge. M5's time-driven movement still bounces, because M10 changes deliberate
+steering rather than rewriting the earlier behaviour.
 
 **M12.** A triangle turns about its own centre, below everything else on the
 screen, at a fixed speed driven by the same clock the rectangle uses. It is

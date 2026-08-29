@@ -29,11 +29,10 @@ bool rect_advance(struct moving_rect *rect, uint64_t elapsed, uint64_t hz,
                   uint64_t screen_width);
 
 /* Moves the rectangle by hand. Horizontally it may go anywhere the screen
- * allows; vertically it is held between `min_y` and `max_y`, which is how the
+ * allows; vertically it stays between `min_y` and `max_y`, which is how the
  * caller keeps it out of the text and away from anything else it would paint
- * over. Returns true if it ended up somewhere new.
- *
- * This does not wrap at the edges. Wrapping is M10.
+ * over. Crossing either end wraps to the other end while preserving the
+ * remainder of the step. Returns true if it ended up somewhere new.
  */
 bool rect_nudge(struct moving_rect *rect, int64_t dx, int64_t dy,
                 uint64_t screen_width, int64_t min_y, int64_t max_y);

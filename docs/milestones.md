@@ -26,8 +26,8 @@ Nothing here has been booted on a physical machine yet.
 | M7 | Conditionals | One conditional expression, IF a compared to b THEN x ELSE y, taking either branch | Verified software milestone |
 | M8 | Variables | Stores and updates named values, and shows them changing | Verified software milestone |
 | M9 | Keyboard controlled rectangle | The arrow keys move the rectangle, which stops drifting once it is being steered | Verified software milestone |
-| M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Next |
-| M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Planned |
+| M10 | Edge wrapping | The rectangle wraps around the screen edges instead of leaving | Verified software milestone |
+| M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Next |
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
@@ -59,8 +59,21 @@ Nothing else lives in that band, so steering cannot rub out text or part of the
 shape that turns. Widening it would need something that can repaint whatever
 was underneath, and no milestone has asked for that.
 
-Wrapping at the edges is M10, and picking the rectangle up with the pointer is
-M11. Neither is here.
+Picking the rectangle up with the pointer is M11. It is not part of M9.
+
+## What M10 added
+
+Arrow-key movement wraps at all four ends of the rectangle's safe corridor.
+The whole rectangle always remains visible: crossing the left or right edge
+reappears at the opposite horizontal edge, and crossing the top or bottom
+reappears at the opposite end of the vertical corridor. Any part of the
+sixteen-pixel step beyond the edge is preserved, so repeated steps stay evenly
+spaced rather than sticking to an edge for one press.
+
+This applies only to deliberate arrow-key movement. M5's time-driven motion
+still reflects at the horizontal edges, preserving that earlier milestone's
+behaviour. The wrap arithmetic takes constant time even for a very large step
+and is exercised with the largest signed inputs by the host tests.
 
 ## What M12 added
 
@@ -103,7 +116,7 @@ have actually moved.
 
 ## Verification status
 
-M1 to M9 and M12 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M10 and M12 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -116,10 +129,12 @@ Two kinds of test run:
   without shift, that arithmetic and the one conditional get the right answer
   and refuse overflow, division by zero, fractional powers and malformed input,
   and that the variable table stores, overwrites, refuses a name too many and
-  leaves itself alone when a line is refused. 386 checks in six programs.
+  leaves itself alone when a line is refused. Seven host programs cover these
+  boundaries.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
-  what it stored, and inspects eleven captured framebuffers: the sum line,
+  what it stored, steers the rectangle across two edges, and inspects fifteen
+  captured framebuffers: the sum line,
   the message, the key line, a rectangle that is whole, on screen and in a
   different place each time, and a cursor that starts in the right place,
   follows the mouse exactly, keeps its shape, and stays on screen.

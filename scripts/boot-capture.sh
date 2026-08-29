@@ -16,6 +16,8 @@
 #   screen-assign.ppm a value stored under a name
 #   screen-var.ppm    that name used in a sum on a later line
 #   screen-varif.ppm  that name used in a conditional on a later line
+#   screen-wrap-down.ppm the steered rectangle after crossing its lower edge
+#   screen-wrap-left.ppm the steered rectangle after crossing its left edge
 #   debug.log         kernel log via QEMU's debug port
 #   serial.log        the same log via COM1, which real hardware also has
 #
@@ -55,10 +57,16 @@ SHOT_VAR="${SHOT_VAR:-$BUILD_DIR/screen-var.ppm}"
 SHOT_VARIF="${SHOT_VARIF:-$BUILD_DIR/screen-varif.ppm}"
 SHOT_STEER_DOWN="${SHOT_STEER_DOWN:-$BUILD_DIR/screen-steer-down.ppm}"
 SHOT_STEER_LEFT="${SHOT_STEER_LEFT:-$BUILD_DIR/screen-steer-left.ppm}"
+SHOT_WRAP_DOWN="${SHOT_WRAP_DOWN:-$BUILD_DIR/screen-wrap-down.ppm}"
+SHOT_WRAP_LEFT="${SHOT_WRAP_LEFT:-$BUILD_DIR/screen-wrap-left.ppm}"
 # M9. Three presses down and eight left, so the checker can look for exactly
 # three and exactly eight steps rather than just "it moved".
 STEER_DOWN_KEYS="${STEER_DOWN_KEYS:-down down down}"
 STEER_LEFT_KEYS="${STEER_LEFT_KEYS:-left left left left left left left left}"
+# M10. The M9 sequence leaves the rectangle eight pixels from the corridor's
+# lower edge. One more down wraps vertically; sixty-one left presses travel
+# farther than the widest possible horizontal range and therefore cross x=0.
+WRAP_LEFT_PRESSES="${WRAP_LEFT_PRESSES:-61}"
 ASSIGN_KEYS="${ASSIGN_KEYS:-x equal 5 ret}"
 VAR_KEYS="${VAR_KEYS:-x kp_add 3 ret}"
 VARIF_KEYS="${VARIF_KEYS:-i f spc x shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
@@ -101,6 +109,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_VARIF"
 : > "$SHOT_STEER_DOWN"
 : > "$SHOT_STEER_LEFT"
+: > "$SHOT_WRAP_DOWN"
+: > "$SHOT_WRAP_LEFT"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
 
@@ -193,6 +203,18 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_STEER_LEFT"
     sleep 2
+    echo "sendkey down"
+    sleep "$TYPE_DELAY"
+    sleep 2
+    echo "screendump $SHOT_WRAP_DOWN"
+    sleep 2
+    for ((press = 0; press < WRAP_LEFT_PRESSES; press++)); do
+        echo "sendkey left"
+        sleep "$TYPE_DELAY"
+    done
+    sleep 2
+    echo "screendump $SHOT_WRAP_LEFT"
+    sleep 2
     echo "quit"
 } | "$QEMU" \
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
@@ -216,6 +238,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_VARIF" ] || fail "QEMU produced no screenshot at $SHOT_VARIF"
 [ -s "$SHOT_STEER_DOWN" ] || fail "QEMU produced no screenshot at $SHOT_STEER_DOWN"
 [ -s "$SHOT_STEER_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_STEER_LEFT"
+[ -s "$SHOT_WRAP_DOWN" ] || fail "QEMU produced no screenshot at $SHOT_WRAP_DOWN"
+[ -s "$SHOT_WRAP_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_WRAP_LEFT"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"
 echo "boot-capture: key $KEY, mouse moved $MOUSE_DX $MOUSE_DY then shoved at the corner"
@@ -227,3 +251,4 @@ if [ -s "$DEBUG_LOG" ]; then
     sed 's/^/    /' "$DEBUG_LOG"
 fi
 echo "boot-capture: steered the rectangle with $STEER_DOWN_KEYS then $STEER_LEFT_KEYS"
+echo "boot-capture: wrapped it with down then $WRAP_LEFT_PRESSES presses of left"

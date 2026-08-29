@@ -162,33 +162,35 @@ static void test_rect_nudge(void)
     }
     check(r.x == 400 - 160, "ten presses move it ten steps");
 
-    printf("it stops at the edges rather than leaving\n");
+    printf("it wraps at the horizontal edges without leaving\n");
     r = make_rect(10, 1);
     r.y = 520;
-    for (int i = 0; i < 20; i++) {
-        rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y);
-    }
-    check(r.x == 0, "pushed left it stops at the left edge");
-    check(!rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y), "and pushing further does nothing");
+    check(rect_nudge(&r, -16, 0, SCREEN_W, min_y, max_y) && r.x == 955,
+          "crossing left wraps to the right with the remainder");
 
     r = make_rect(SCREEN_W - 320 - 10, 1);
     r.y = 520;
-    for (int i = 0; i < 20; i++) {
-        rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y);
-    }
-    check(r.x == SCREEN_W - 320, "pushed right it stops with its edge on the screen");
+    check(rect_nudge(&r, 16, 0, SCREEN_W, min_y, max_y) && r.x == 5,
+          "crossing right wraps to the left with the remainder");
 
-    printf("it stays inside the corridor it was given\n");
-    r = make_rect(400, 1);
+    r = make_rect(0, 1);
     r.y = 520;
-    for (int i = 0; i < 20; i++) {
-        rect_nudge(&r, 0, -16, SCREEN_W, min_y, max_y);
-    }
-    check(r.y == min_y, "pushed up it stops at the top of the corridor");
-    for (int i = 0; i < 40; i++) {
-        rect_nudge(&r, 0, 16, SCREEN_W, min_y, max_y);
-    }
-    check(r.y == max_y, "pushed down it stops at the bottom");
+    check(rect_nudge(&r, -960, 0, SCREEN_W, min_y, max_y) && r.x == 1,
+          "a nearly whole-screen backward step wraps consistently");
+    check(rect_nudge(&r, INT64_MAX, 0, SCREEN_W, min_y, max_y),
+          "a huge forward step is bounded work");
+    check(rect_nudge(&r, INT64_MIN, 0, SCREEN_W, min_y, max_y),
+          "a huge backward step is bounded work");
+
+    printf("it wraps inside the vertical corridor it was given\n");
+    r = make_rect(400, 1);
+    r.y = 504;
+    check(rect_nudge(&r, 0, -16, SCREEN_W, min_y, max_y) && r.y == 558,
+          "crossing the top wraps near the bottom");
+    r.y = 560;
+    check(rect_nudge(&r, 0, 16, SCREEN_W, min_y, max_y) && r.y == 506,
+          "crossing the bottom wraps near the top");
+    check(r.y >= min_y && r.y <= max_y, "the wrapped rectangle stays in its corridor");
 
     printf("a corridor with no room, and other nonsense\n");
     r = make_rect(400, 1);

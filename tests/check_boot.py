@@ -18,6 +18,8 @@ milestones:
       later lines, which only works if it was really remembered
   M9  the rectangle steered with the arrow keys, moving exactly as far as the
       presses say and stopping inside the corridor it is allowed
+  M10 the steered rectangle wrapping across both corridor edges while remaining
+      whole and on screen
   M12 a triangle turning about its own centre, drawn with floating point:
       present in every capture, whole, on screen, and in a different position
       each time
@@ -51,6 +53,8 @@ SCREEN_VAR = BUILD_DIR / "screen-var.ppm"
 SCREEN_VARIF = BUILD_DIR / "screen-varif.ppm"
 SCREEN_STEER_DOWN = BUILD_DIR / "screen-steer-down.ppm"
 SCREEN_STEER_LEFT = BUILD_DIR / "screen-steer-left.ppm"
+SCREEN_WRAP_DOWN = BUILD_DIR / "screen-wrap-down.ppm"
+SCREEN_WRAP_LEFT = BUILD_DIR / "screen-wrap-left.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
 SERIAL_LOG = BUILD_DIR / "serial.log"
 
@@ -106,6 +110,7 @@ RECTANGLES: list[tuple[str, int, int]] = []
 STEER_STEP = 16
 STEER_DOWN_PRESSES = 3
 STEER_LEFT_PRESSES = 8
+WRAP_LEFT_PRESSES = 61
 CURSOR_START_X_DIVISOR = 4
 CURSOR_START_Y_DIVISOR = 6
 # Must match scripts/boot-capture.sh.
@@ -583,6 +588,40 @@ def check_steering() -> list[str]:
     ]
 
 
+def check_wrapping(size) -> list[str]:
+    """M10: crossing each corridor edge reappears at the opposite edge."""
+    if len(RECTANGLES) < 3:
+        raise CheckFailed("not enough captures to tell whether wrapping works")
+
+    before, wrapped_down, wrapped_left = RECTANGLES[-3:]
+    if wrapped_down[1] != before[1]:
+        raise CheckFailed(
+            f"pressing down while wrapping changed x from {before[1]} to "
+            f"{wrapped_down[1]}")
+    if wrapped_down[2] >= before[2]:
+        raise CheckFailed(
+            f"crossing the lower corridor edge moved y from {before[2]} to "
+            f"{wrapped_down[2]}; it should reappear near the top")
+
+    width, _ = size
+    span = width - width // RECT_WIDTH_DIVISOR + 1
+    expected_x = (wrapped_down[1] - STEER_STEP * WRAP_LEFT_PRESSES) % span
+    if wrapped_left[1] != expected_x:
+        raise CheckFailed(
+            f"{WRAP_LEFT_PRESSES} presses of left from x={wrapped_down[1]} "
+            f"landed at {wrapped_left[1]}, expected wrapped x={expected_x}")
+    if wrapped_left[2] != wrapped_down[2]:
+        raise CheckFailed(
+            f"pressing left while wrapping changed y from {wrapped_down[2]} to "
+            f"{wrapped_left[2]}")
+
+    return [
+        f"  M10 rectangle wrapped down from y={before[2]} to y={wrapped_down[2]}, "
+        f"then left from x={wrapped_down[1]} to x={wrapped_left[1]} while "
+        f"remaining whole and on screen",
+    ]
+
+
 def check_rotation() -> list[str]:
     """M12: the triangle turns, and turns about a fixed point.
 
@@ -708,6 +747,12 @@ def main() -> int:
         notes += steer_down_notes + steer_left_notes
 
         notes += check_steering()
+        wrap_down_notes, _, _, _, _ = check_screen(
+            SCREEN_WRAP_DOWN, M2_AFTER_ARROW_DOWN, M8_VARIF)
+        wrap_left_notes, _, _, _, _ = check_screen(
+            SCREEN_WRAP_LEFT, M2_AFTER_ARROW_LEFT, M8_VARIF)
+        notes += wrap_down_notes + wrap_left_notes
+        notes += check_wrapping(size)
         notes += check_rotation()
         notes += check_log()
     except CheckFailed as exc:
@@ -716,8 +761,8 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M9 and M12 checks passed: message, key press, a rectangle that "
-          "drifts and can then be steered, a cursor that follows the mouse, sums "
+    print("M1 to M10 and M12 checks passed: message, key press, a rectangle that "
+          "drifts, can be steered and wraps, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, and a triangle turning about its own centre")
     print("A person should still watch it boot once with make run.")

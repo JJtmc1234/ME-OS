@@ -13,6 +13,7 @@
  * M8: remember values under names, and use them in sums and conditionals.
  * M12: turn a triangle about its own centre, using floating point.
  * M9: steer the rectangle with the arrow keys.
+ * M10: wrap the steered rectangle at each edge of its safe corridor.
  *
  * Everything is drawn directly to the framebuffer. There is no console, no
  * scrolling, and no input buffer, on purpose: each milestone adds one small
@@ -410,8 +411,8 @@ void kmain(void)
     rect_state.direction = 1;
     rect_state.carried = 0;
 
-    /* M9: the corridor the arrow keys may move it within. It starts below the
-     * key line and stops above the triangle, so steering it cannot rub out any
+    /* M9/M10: the corridor the arrow keys may move it within. It starts below
+     * the key line and ends above the triangle, so steering cannot rub out any
      * text or any part of the shape that turns. Nothing else lives in between.
      * A wider range would need something that can repaint what was underneath,
      * which no milestone has asked for yet. */
