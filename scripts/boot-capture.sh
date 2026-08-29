@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # Boots the ME OS ISO headless, captures the framebuffer, then quits QEMU.
 #
-# Writes:
-#   build/screen-boot.ppm   the framebuffer just after boot
-#   build/screen-key.ppm    the framebuffer after one key press is injected
-#   build/screen-mouse.ppm  the framebuffer after the mouse is moved
-#   build/screen-clamp.ppm  the framebuffer after the mouse is shoved hard
+# Writes to BUILD_DIR, which defaults to build/:
+#   screen-boot.ppm   the framebuffer just after boot
+#   screen-key.ppm    the framebuffer after one key press is injected
+#   screen-mouse.ppm  the framebuffer after the mouse is moved
+#   screen-clamp.ppm  the framebuffer after the mouse is shoved hard
 #                           toward the corner, to show repeated movement works
 #                           and the cursor stays on screen
-#   build/screen-sum.ppm    the framebuffer after a sum is typed and evaluated
-#   build/screen-power.ppm  the framebuffer after a power is typed, which needs
+#   screen-sum.ppm    the framebuffer after a sum is typed and evaluated
+#   screen-power.ppm  the framebuffer after a power is typed, which needs
 #                           a shifted key, and evaluated
-#   build/screen-true.ppm   a conditional whose condition holds
-#   build/screen-false.ppm  the same conditional with the condition reversed
-#   build/screen-assign.ppm a value stored under a name
-#   build/screen-var.ppm    that name used in a sum on a later line
-#   build/screen-varif.ppm  that name used in a conditional on a later line
-#   build/debug.log        kernel log via QEMU's debug port
-#   build/serial.log       the same log via COM1, which real hardware also has
+#   screen-true.ppm   a conditional whose condition holds
+#   screen-false.ppm  the same conditional with the condition reversed
+#   screen-assign.ppm a value stored under a name
+#   screen-var.ppm    that name used in a sum on a later line
+#   screen-varif.ppm  that name used in a conditional on a later line
+#   debug.log         kernel log via QEMU's debug port
+#   serial.log        the same log via COM1, which real hardware also has
 #
 # The key press and the mouse movements are sent through the QEMU monitor, so
 # M2 and M4 can be checked without anyone at a keyboard or holding a mouse.
@@ -28,32 +28,33 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-ISO="build/me-os.iso"
-SHOT_BOOT="${SHOT_BOOT:-build/screen-boot.ppm}"
-SHOT_KEY="${SHOT_KEY:-build/screen-key.ppm}"
-SHOT_MOUSE="${SHOT_MOUSE:-build/screen-mouse.ppm}"
-SHOT_CLAMP="${SHOT_CLAMP:-build/screen-clamp.ppm}"
-SHOT_SUM="${SHOT_SUM:-build/screen-sum.ppm}"
+BUILD_DIR="${BUILD_DIR:-build}"
+ISO="$BUILD_DIR/me-os.iso"
+SHOT_BOOT="${SHOT_BOOT:-$BUILD_DIR/screen-boot.ppm}"
+SHOT_KEY="${SHOT_KEY:-$BUILD_DIR/screen-key.ppm}"
+SHOT_MOUSE="${SHOT_MOUSE:-$BUILD_DIR/screen-mouse.ppm}"
+SHOT_CLAMP="${SHOT_CLAMP:-$BUILD_DIR/screen-clamp.ppm}"
+SHOT_SUM="${SHOT_SUM:-$BUILD_DIR/screen-sum.ppm}"
 # The sum typed on the emulated keyboard. tests/check_boot.py expects this one,
 # so the two belong together. It starts with escape because since M8 every
 # letter types, so the key injected to prove M2 is sitting on the line.
 SUM_KEYS="${SUM_KEYS:-esc 1 2 kp_add 3 0 ret}"
-SHOT_POWER="${SHOT_POWER:-build/screen-power.ppm}"
+SHOT_POWER="${SHOT_POWER:-$BUILD_DIR/screen-power.ppm}"
 # shift-6 is a caret, which is also a check that shift decoding works.
 POWER_KEYS="${POWER_KEYS:-2 shift-6 5 ret}"
-SHOT_TRUE="${SHOT_TRUE:-build/screen-true.ppm}"
-SHOT_FALSE="${SHOT_FALSE:-build/screen-false.ppm}"
+SHOT_TRUE="${SHOT_TRUE:-$BUILD_DIR/screen-true.ppm}"
+SHOT_FALSE="${SHOT_FALSE:-$BUILD_DIR/screen-false.ppm}"
 # IF 3>2 THEN 10 ELSE 20, and the same with the comparison reversed. shift-dot
 # is the greater than sign.
 TRUE_KEYS="${TRUE_KEYS:-i f spc 3 shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
 FALSE_KEYS="${FALSE_KEYS:-i f spc 2 shift-dot 3 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
 # M8. Store 5 under X, then use X on two later lines. The unshifted equals key
 # is the assignment, which is why it is not the key that evaluates.
-SHOT_ASSIGN="${SHOT_ASSIGN:-build/screen-assign.ppm}"
-SHOT_VAR="${SHOT_VAR:-build/screen-var.ppm}"
-SHOT_VARIF="${SHOT_VARIF:-build/screen-varif.ppm}"
-SHOT_STEER_DOWN="${SHOT_STEER_DOWN:-build/screen-steer-down.ppm}"
-SHOT_STEER_LEFT="${SHOT_STEER_LEFT:-build/screen-steer-left.ppm}"
+SHOT_ASSIGN="${SHOT_ASSIGN:-$BUILD_DIR/screen-assign.ppm}"
+SHOT_VAR="${SHOT_VAR:-$BUILD_DIR/screen-var.ppm}"
+SHOT_VARIF="${SHOT_VARIF:-$BUILD_DIR/screen-varif.ppm}"
+SHOT_STEER_DOWN="${SHOT_STEER_DOWN:-$BUILD_DIR/screen-steer-down.ppm}"
+SHOT_STEER_LEFT="${SHOT_STEER_LEFT:-$BUILD_DIR/screen-steer-left.ppm}"
 # M9. Three presses down and eight left, so the checker can look for exactly
 # three and exactly eight steps rather than just "it moved".
 STEER_DOWN_KEYS="${STEER_DOWN_KEYS:-down down down}"
@@ -69,8 +70,8 @@ MOUSE_DX="${MOUSE_DX:-120}"
 MOUSE_DY="${MOUSE_DY:--60}"
 # Which key to inject. tests/check_boot.py expects this letter on screen.
 KEY="${KEY:-a}"
-DEBUG_LOG="build/debug.log"
-SERIAL_LOG="build/serial.log"
+DEBUG_LOG="$BUILD_DIR/debug.log"
+SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
 BOOT_WAIT="${BOOT_WAIT:-12}"

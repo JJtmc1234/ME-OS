@@ -30,25 +30,29 @@ Run through `make test`.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCREEN_BOOT = ROOT / "build" / "screen-boot.ppm"
-SCREEN_KEY = ROOT / "build" / "screen-key.ppm"
-SCREEN_MOUSE = ROOT / "build" / "screen-mouse.ppm"
-SCREEN_CLAMP = ROOT / "build" / "screen-clamp.ppm"
-SCREEN_SUM = ROOT / "build" / "screen-sum.ppm"
-SCREEN_POWER = ROOT / "build" / "screen-power.ppm"
-SCREEN_TRUE = ROOT / "build" / "screen-true.ppm"
-SCREEN_FALSE = ROOT / "build" / "screen-false.ppm"
-SCREEN_ASSIGN = ROOT / "build" / "screen-assign.ppm"
-SCREEN_VAR = ROOT / "build" / "screen-var.ppm"
-SCREEN_VARIF = ROOT / "build" / "screen-varif.ppm"
-SCREEN_STEER_DOWN = ROOT / "build" / "screen-steer-down.ppm"
-SCREEN_STEER_LEFT = ROOT / "build" / "screen-steer-left.ppm"
-DEBUG_LOG = ROOT / "build" / "debug.log"
-SERIAL_LOG = ROOT / "build" / "serial.log"
+BUILD_DIR = Path(os.environ.get("BUILD_DIR", "build"))
+if not BUILD_DIR.is_absolute():
+    BUILD_DIR = ROOT / BUILD_DIR
+SCREEN_BOOT = BUILD_DIR / "screen-boot.ppm"
+SCREEN_KEY = BUILD_DIR / "screen-key.ppm"
+SCREEN_MOUSE = BUILD_DIR / "screen-mouse.ppm"
+SCREEN_CLAMP = BUILD_DIR / "screen-clamp.ppm"
+SCREEN_SUM = BUILD_DIR / "screen-sum.ppm"
+SCREEN_POWER = BUILD_DIR / "screen-power.ppm"
+SCREEN_TRUE = BUILD_DIR / "screen-true.ppm"
+SCREEN_FALSE = BUILD_DIR / "screen-false.ppm"
+SCREEN_ASSIGN = BUILD_DIR / "screen-assign.ppm"
+SCREEN_VAR = BUILD_DIR / "screen-var.ppm"
+SCREEN_VARIF = BUILD_DIR / "screen-varif.ppm"
+SCREEN_STEER_DOWN = BUILD_DIR / "screen-steer-down.ppm"
+SCREEN_STEER_LEFT = BUILD_DIR / "screen-steer-left.ppm"
+DEBUG_LOG = BUILD_DIR / "debug.log"
+SERIAL_LOG = BUILD_DIR / "serial.log"
 
 # These mirror kernel/src/main.c. If the kernel's wording changes, change it here.
 M1_MESSAGE = "IF YOU SEE THIS IT WORKED"

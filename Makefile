@@ -258,9 +258,9 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
-	OVMF_CODE="$(OVMF_CODE)" OVMF_VARS_LOCAL="$(OVMF_LOCAL)" QEMU="$(QEMU)" \
+	BUILD_DIR="$(BUILD)" OVMF_CODE="$(OVMF_CODE)" OVMF_VARS_LOCAL="$(OVMF_LOCAL)" QEMU="$(QEMU)" \
 		scripts/boot-capture.sh
-	python3 tests/check_boot.py
+	BUILD_DIR="$(BUILD)" python3 tests/check_boot.py
 
 check: check-tools all test-unit test
 
