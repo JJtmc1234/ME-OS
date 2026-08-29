@@ -70,9 +70,9 @@ SHOT_DRAG_RELEASE="${SHOT_DRAG_RELEASE:-$BUILD_DIR/screen-drag-release.ppm}"
 STEER_DOWN_KEYS="${STEER_DOWN_KEYS:-down down down}"
 STEER_LEFT_KEYS="${STEER_LEFT_KEYS:-left left left left left left left left}"
 # M10. The M9 sequence leaves the rectangle eight pixels from the corridor's
-# lower edge. One more down wraps vertically; sixty-one left presses travel
-# farther than the widest possible horizontal range and therefore cross x=0.
-WRAP_LEFT_PRESSES="${WRAP_LEFT_PRESSES:-61}"
+# lower edge. One more down wraps vertically; twenty-three left presses cross
+# x=0 in Demo's narrower corridor and land under M11's known press point.
+WRAP_LEFT_PRESSES="${WRAP_LEFT_PRESSES:-23}"
 ASSIGN_KEYS="${ASSIGN_KEYS:-x equal 5 ret}"
 VAR_KEYS="${VAR_KEYS:-x kp_add 3 ret}"
 VARIF_KEYS="${VARIF_KEYS:-i f spc x shift-dot 2 spc t h e n spc 1 0 spc e l s e spc 2 0 ret}"
@@ -238,7 +238,9 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
         echo "mouse_move 100 0"
         sleep 0.05
     done
-    echo "mouse_move 0 20"
+    # x=850 remains comfortably inside the wrapped rectangle despite the few
+    # pixels of M5 timing variation before the first steering key freezes it.
+    echo "mouse_move 50 20"
     sleep 2
     echo "screendump $SHOT_DRAG_READY"
     sleep 2

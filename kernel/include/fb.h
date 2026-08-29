@@ -1,8 +1,4 @@
-/* Minimal linear framebuffer output for the M1 boot proof.
- *
- * This is deliberately not a graphics abstraction. It clears the screen and
- * draws bitmap glyphs, and nothing else.
- */
+/* Checked low-level linear framebuffer access and surface presentation. */
 #ifndef ME_FB_H
 #define ME_FB_H
 
@@ -11,6 +7,7 @@
 #include <stdint.h>
 
 #include "limine.h"
+#include "surface.h"
 
 /* Returns false if the framebuffer uses a layout this code cannot drive,
  * in which case nothing has been written and no pointer is retained. */
@@ -25,8 +22,7 @@ uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 void fb_clear(uint32_t colour);
 
-/* Single pixel access, both clipped. fb_pixel returns 0 outside the screen,
- * which is what the cursor's save and restore relies on. */
+/* Single pixel access, both clipped. fb_pixel returns 0 outside the screen. */
 uint32_t fb_pixel(uint64_t x, uint64_t y);
 void fb_put_pixel(uint64_t x, uint64_t y, uint32_t colour);
 
@@ -42,5 +38,9 @@ void fb_draw_line(int64_t x0, int64_t y0, int64_t x1, int64_t y1, uint32_t colou
  * Anything falling outside the framebuffer is clipped. */
 void fb_draw_string(const char *s, uint64_t x, uint64_t y,
                     uint32_t colour, uint64_t scale);
+
+/* Presents a software-composited surface at the framebuffer origin. Both the
+ * source dimensions and framebuffer writes are clipped. */
+void fb_present(const struct surface *surface);
 
 #endif /* ME_FB_H */

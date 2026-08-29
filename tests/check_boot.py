@@ -25,6 +25,8 @@ milestones:
   M12 a triangle turning about its own centre, drawn with floating point:
       present in every capture, whole, on screen, and in a different position
       each time
+  M14 two overlapping opaque window surfaces, with all existing Demo drawing
+      in local coordinates and a compositor-owned desktop background
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -94,6 +96,18 @@ RECT_COLOUR = (60, 170, 220)
 RECT_WIDTH_DIVISOR = 4
 RECT_HEIGHT_DIVISOR = 14
 
+DEMO_X = 40
+DEMO_Y = 40
+DEMO_WIDTH = 1180
+DEMO_HEIGHT = 720
+SYSTEM_X = 860
+SYSTEM_Y = 80
+SYSTEM_WIDTH = 300
+SYSTEM_HEIGHT = 180
+DESKTOP_COLOUR = (18, 24, 38)
+SYSTEM_COLOUR = (34, 46, 70)
+ACCENT_COLOUR = (82, 190, 220)
+
 CURSOR_COLOUR = (255, 214, 64)
 
 # M12. These mirror kernel/src/main.c and kernel/src/geometry.c.
@@ -115,7 +129,7 @@ RECTANGLES: list[tuple[str, int, int]] = []
 STEER_STEP = 16
 STEER_DOWN_PRESSES = 3
 STEER_LEFT_PRESSES = 8
-WRAP_LEFT_PRESSES = 61
+WRAP_LEFT_PRESSES = 23
 CURSOR_START_X_DIVISOR = 4
 CURSOR_START_Y_DIVISOR = 6
 # Must match scripts/boot-capture.sh.
@@ -217,8 +231,43 @@ def read_ppm(path: Path) -> tuple[int, int, bytes]:
     return width, height, pixels
 
 
+def check_window_layout(path: Path) -> str:
+    """M14: prove the desktop and both opaque surfaces occupy their own regions."""
+    width, height, pixels = read_ppm(path)
+
+    def colour_at(x: int, y: int) -> tuple[int, int, int]:
+        if not (0 <= x < width and 0 <= y < height):
+            raise CheckFailed(f"{path.name}: M14 sample ({x}, {y}) is off screen")
+        index = (y * width + x) * 3
+        return pixels[index], pixels[index + 1], pixels[index + 2]
+
+    samples = (
+        ((0, 0), DESKTOP_COLOUR, "desktop corner"),
+        ((DEMO_X - 1, DEMO_Y + 100), DESKTOP_COLOUR, "desktop beside Demo"),
+        ((DEMO_X + 10, DEMO_Y + 100), (0, 0, 0), "Demo local background"),
+        ((SYSTEM_X, SYSTEM_Y), ACCENT_COLOUR, "System accent bar"),
+        ((SYSTEM_X + 10, SYSTEM_Y + 40), SYSTEM_COLOUR, "System body"),
+    )
+    for point, expected, label in samples:
+        actual = colour_at(*point)
+        if actual != expected:
+            raise CheckFailed(
+                f"{path.name}: {label} at {point} is rgb{actual}, expected rgb{expected}"
+            )
+
+    if not (DEMO_X < SYSTEM_X < DEMO_X + DEMO_WIDTH and
+            DEMO_Y < SYSTEM_Y < DEMO_Y + DEMO_HEIGHT):
+        raise CheckFailed("M14 fixture no longer places System over Demo")
+
+    return (
+        f"M14 compositor: desktop background, Demo {DEMO_WIDTH}x{DEMO_HEIGHT} "
+        f"at ({DEMO_X}, {DEMO_Y}), and System {SYSTEM_WIDTH}x{SYSTEM_HEIGHT} "
+        f"opaque above it at ({SYSTEM_X}, {SYSTEM_Y})"
+    )
+
+
 def read_screen(path: Path):
-    """Sort every non black pixel by what drew it: text, rectangle, or cursor."""
+    """Sort pixels drawn by the Demo app while accepting compositor colours."""
     width, height, pixels = read_ppm(path)
     rows: dict[int, set[int]] = {}
     rect: set[tuple[int, int]] = set()
@@ -239,11 +288,11 @@ def read_screen(path: Path):
             cursor.add((x, y))
         elif colour == TRIANGLE_COLOUR:
             triangle.add((x, y))
+        elif colour in (DESKTOP_COLOUR, SYSTEM_COLOUR, ACCENT_COLOUR):
+            continue
         else:
             raise CheckFailed(
-                f"{path.name}: pixel at ({x}, {y}) is rgb{colour}; expected black, "
-                f"white text, the M3 rectangle rgb{RECT_COLOUR}, or the M4 cursor "
-                f"rgb{CURSOR_COLOUR}, or the M12 triangle rgb{TRIANGLE_COLOUR}"
+                f"{path.name}: pixel at ({x}, {y}) is unexpected rgb{colour}"
             )
 
     if not rows:
@@ -338,8 +387,8 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
                 f"does not explain, the first at {stray[0]}"
             )
 
-    expected_w = width // RECT_WIDTH_DIVISOR
-    expected_h = height // RECT_HEIGHT_DIVISOR
+    expected_w = DEMO_WIDTH // RECT_WIDTH_DIVISOR
+    expected_h = DEMO_HEIGHT // RECT_HEIGHT_DIVISOR
     if (actual_w, actual_h) != (expected_w, expected_h):
         raise CheckFailed(
             f"{name}: the rectangle is {actual_w}x{actual_h}, expected "
@@ -348,12 +397,12 @@ def check_rectangle(rect: set[tuple[int, int]], width: int, height: int,
     # No centring check: since M5 the rectangle moves, so where it is depends
     # on when the screen was captured. That it moves is checked across
     # captures, in check_rectangle_movement.
-    if left < 0 or right >= width:
-        raise CheckFailed(f"{name}: the rectangle is not fully on screen")
+    if left < DEMO_X or right >= DEMO_X + DEMO_WIDTH:
+        raise CheckFailed(f"{name}: the rectangle escaped the Demo surface horizontally")
     if top <= key_line.bottom:
         raise CheckFailed(f"{name}: the rectangle overlaps or sits above the key line")
-    if right >= width or bottom >= height:
-        raise CheckFailed(f"{name}: the rectangle runs off the screen")
+    if bottom >= DEMO_Y + DEMO_HEIGHT:
+        raise CheckFailed(f"{name}: the rectangle escaped the Demo surface vertically")
     covered = actual_w * actual_h - len(rect)
     behind = f", {covered} pixels behind the cursor" if covered else ""
     return (f"M3 rectangle: {actual_w}x{actual_h} at ({left}, {top}), solid and on "
@@ -382,9 +431,11 @@ def check_triangle(triangle: set[tuple[int, int]], width: int, height: int,
     if left < 0 or top < 0 or right >= width or bottom >= height:
         raise CheckFailed(f"{name}: the triangle is not fully on screen")
 
-    expected_x = width // TRIANGLE_CENTRE_X_DIVISOR
-    expected_y = height * TRIANGLE_CENTRE_Y_PARTS // TRIANGLE_CENTRE_Y_DIVISOR
-    radius = height // TRIANGLE_RADIUS_DIVISOR
+    expected_x = DEMO_X + DEMO_WIDTH // TRIANGLE_CENTRE_X_DIVISOR
+    expected_y = (DEMO_Y +
+                  DEMO_HEIGHT * TRIANGLE_CENTRE_Y_PARTS //
+                  TRIANGLE_CENTRE_Y_DIVISOR)
+    radius = DEMO_HEIGHT // TRIANGLE_RADIUS_DIVISOR
 
     # The centre is the average of the drawn pixels, not the middle of the
     # bounding box. A triangle's box is not centred on the shape: as it turns,
@@ -461,6 +512,7 @@ def check_log() -> list[str]:
     expected = (
         "kernel entered",
         "window model ready, created IDs 1 and 2",
+        "M14 compositor ready with two overlapping windows",
         "drew the M1 message",
         "drew the M3 rectangle",
         "keyboard ready",
@@ -547,14 +599,13 @@ def check_cursor_movement(start, moved, clamped, size) -> list[str]:
 
 def check_rectangle_movement(positions, size) -> list[str]:
     """M5: the rectangle crosses the screen, and never leaves it."""
-    width, _ = size
     if len(set(positions)) == 1:
         raise CheckFailed(
             f"the rectangle sat at x={positions[0]} in every capture; it should be moving"
         )
-    limit = width - width // RECT_WIDTH_DIVISOR
-    if any(x < 0 or x > limit for x in positions):
-        raise CheckFailed(f"the rectangle left the screen: {positions}")
+    limit = DEMO_X + DEMO_WIDTH - DEMO_WIDTH // RECT_WIDTH_DIVISOR
+    if any(x < DEMO_X or x > limit for x in positions):
+        raise CheckFailed(f"the rectangle left the Demo surface: {positions}")
     travelled = max(positions) - min(positions)
     return [f"  M5 rectangle moved across {travelled} pixels: {positions}"]
 
@@ -612,9 +663,10 @@ def check_wrapping(size) -> list[str]:
             f"crossing the lower corridor edge moved y from {before[2]} to "
             f"{wrapped_down[2]}; it should reappear near the top")
 
-    width, _ = size
-    span = width - width // RECT_WIDTH_DIVISOR + 1
-    expected_x = (wrapped_down[1] - STEER_STEP * WRAP_LEFT_PRESSES) % span
+    span = DEMO_WIDTH - DEMO_WIDTH // RECT_WIDTH_DIVISOR + 1
+    expected_x = DEMO_X + (
+        wrapped_down[1] - DEMO_X - STEER_STEP * WRAP_LEFT_PRESSES
+    ) % span
     if wrapped_left[1] != expected_x:
         raise CheckFailed(
             f"{WRAP_LEFT_PRESSES} presses of left from x={wrapped_down[1]} "
@@ -637,9 +689,8 @@ def check_dragging(ready_cursor, held_cursor, released_cursor, size) -> list[str
         raise CheckFailed("not enough captures to tell whether dragging works")
 
     ready, held, released = RECTANGLES[-3:]
-    width, height = size
-    rect_width = width // RECT_WIDTH_DIVISOR
-    rect_height = height // RECT_HEIGHT_DIVISOR
+    rect_width = DEMO_WIDTH // RECT_WIDTH_DIVISOR
+    rect_height = DEMO_HEIGHT // RECT_HEIGHT_DIVISOR
     if not (ready[1] <= ready_cursor[0] < ready[1] + rect_width and
             ready[2] <= ready_cursor[1] < ready[2] + rect_height):
         raise CheckFailed(
@@ -715,6 +766,7 @@ def main() -> int:
     try:
         notes, boot_cursor, size, rect_boot, sum_boot = check_screen(
             SCREEN_BOOT, M2_PROMPT)
+        notes.append("  " + check_window_layout(SCREEN_BOOT))
         key_notes, key_cursor, _, rect_key, _ = check_screen(
             SCREEN_KEY, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
         mouse_notes, moved_cursor, _, rect_mouse, _ = check_screen(
@@ -820,10 +872,11 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M12 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M14 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
-          "under a name and used again, and a triangle turning about its own centre")
+          "under a name and used again, a triangle turning about its own centre, and "
+          "two opaque window surfaces composited over a desktop")
     print("A person should still watch it boot once with make run.")
     return 0
 

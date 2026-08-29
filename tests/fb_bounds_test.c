@@ -243,6 +243,36 @@ static void test_colour_packing(void)
     check(fb_rgb(0, 0, 0) == 0u, "black is zero");
 }
 
+static void test_surface_present(void)
+{
+    printf("fb_present copies a composited surface without touching padding\n");
+    uint32_t large_pixels[(WIDTH + 10) * (HEIGHT + 10)];
+    struct surface large;
+    surface_init(&large, large_pixels,
+                 (WIDTH + 10) * (HEIGHT + 10), WIDTH + 10, HEIGHT + 10);
+    const unsigned int colour = 0x00123456u;
+    surface_clear(&large, colour);
+    reset();
+    fb_present(&large);
+    check(count_pixels(colour) == WIDTH * HEIGHT, "a larger source fills the visible screen");
+    check(guards_intact(), "presentation keeps framebuffer guards intact");
+    check(padding_intact(), "presentation does not write row padding");
+
+    uint32_t small_pixels[4 * 3];
+    struct surface small;
+    surface_init(&small, small_pixels, 12, 4, 3);
+    surface_clear(&small, colour);
+    reset();
+    fb_present(&small);
+    check(count_pixels(colour) == 12, "a smaller source copies only its own pixels");
+    check(pixel_at(3, 2) == colour, "the smaller source reaches its bottom-right pixel");
+    check(guards_intact() && padding_intact(), "small presentation stays bounded");
+
+    reset();
+    fb_present(NULL);
+    check(guards_intact() && padding_intact(), "presenting no surface is safe");
+}
+
 int main(void)
 {
     block = malloc(GUARD * 2 + PITCH * HEIGHT);
@@ -257,6 +287,7 @@ int main(void)
     test_text_clipping();
     test_line_clipping();
     test_colour_packing();
+    test_surface_present();
 
     free(block);
     if (failures > 0) {

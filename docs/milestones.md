@@ -30,8 +30,8 @@ Nothing here has been booted on a physical machine yet.
 | M11 | Click and drag rectangle | The rectangle can be picked up and moved with the pointer | Verified software milestone |
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
 | M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Verified software milestone |
-| M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Next |
-| M15 | Focus and event queues | Focused input is routed as bounded per-window events | Planned |
+| M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Verified software milestone |
+| M15 | Focus and event queues | Focused input is routed as bounded per-window events | Next |
 | M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Planned |
 | M17 | Window resizing | Bounded live resizing with explicit surface semantics | Planned |
 
@@ -40,8 +40,9 @@ were already written down and renumbering milestones that people have read is
 worse than taking them out of order. It was therefore built before M9. M9 to
 M11 are now complete without renumbering any of them.
 
-The next direction is a small window system. The fixed pool in M13 is an
-explicit stepping stone because the kernel has no allocator yet; building a
+The current direction is a small window system. The fixed pool in M13 and
+fixed surface stores in M14 are explicit stepping stones because the kernel
+has no allocator yet; building a
 general heap only to claim dynamic windows would be a much larger subsystem.
 Filesystem, processes, networking, audio and hardware boot remain outside this
 sequence.
@@ -123,7 +124,8 @@ other write to the framebuffer.
 
 The triangle sits below everything else and turns at 0.6 radians a second on
 the same clock the rectangle uses. It is redrawn only when its rounded corners
-have actually moved.
+have actually moved. Since M14 the lines are drawn into Demo's surface rather
+than directly into the framebuffer.
 
 ## What M13 added
 
@@ -144,7 +146,33 @@ explicit safe failure when full. All lifetime, lookup and ordering operations
 go through stable IDs, so replacing the temporary pool after a real allocator
 exists does not require app or compositor callers to depend on slot addresses.
 The kernel creates `Demo` and `System` objects through this path at boot; M14
-will give them surfaces and make them visible.
+gives them surfaces and makes them visible.
+
+## What M14 added
+
+`surface.c` provides an externally backed opaque pixel surface. Its coordinates
+are local, all pixel, fill, line, text and blit operations clip safely, and
+extreme off-screen fill/blit origins are bounded no-ops rather than signed
+overflow. A window may attach one surface whose dimensions exactly match its
+geometry. Resizing an attached window is refused because M14 does not pretend
+that surface reallocation semantics already exist.
+
+`compositor.c` clears a desktop surface and walks the manager's explicit
+bottom-to-top z-order, copying each non-minimized window's visible portion.
+Demo is an 1180 by 720 black surface at (40, 40) containing every earlier
+visual milestone in local coordinates. System is a 300 by 180 opaque surface at
+(860, 80), visibly overlapping Demo above it. The cursor is drawn last into the
+composed desktop, then `fb_present` copies that result within the framebuffer's
+pitch and bounds. Apps no longer write arbitrary framebuffer regions.
+
+The three backing stores are bounded static arrays: at most 1920 by 1080 for
+the desktop and exactly the current two window sizes. This is the honest
+stepping stone supported by the allocator-free kernel, not a hidden heap.
+Partial off-screen windows, overlap, z-order changes, minimized windows,
+surface guards, extreme clipping, cursor clipping and framebuffer presentation
+are covered by host tests. The QEMU run samples desktop, Demo and System
+colours at their overlap and repeats every earlier visible regression across
+eighteen captures.
 
 ## How a milestone is judged done
 
@@ -157,7 +185,7 @@ will give them surfaces and make them visible.
 
 ## Verification status
 
-M1 to M12 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M14 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -172,7 +200,8 @@ Two kinds of test run:
   and that the variable table stores, overwrites, refuses a name too many and
   leaves itself alone when a line is refused. Seven host programs cover these
   boundaries. An eighth program covers window IDs, object lifetime, geometry,
-  capacity, z-order and hit testing.
+  capacity, z-order and hit testing. A ninth covers local surfaces, clipping,
+  cursor overlay, composition, overlap and presentation guards.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
   what it stored, steers the rectangle across two edges, drags and releases it,
@@ -180,3 +209,5 @@ Two kinds of test run:
   the message, the key line, a rectangle that is whole, on screen and in a
   different place each time, and a cursor that starts in the right place,
   follows the mouse exactly, keeps its shape, and stays on screen.
+  It also samples the desktop and two opaque overlapping windows to prove M14's
+  local surfaces and bottom-to-top composition.

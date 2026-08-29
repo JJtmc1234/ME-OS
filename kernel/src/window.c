@@ -161,10 +161,29 @@ bool window_set_geometry(struct window_manager *manager, WindowId id,
                          struct window_geometry geometry)
 {
     struct window *window = window_get(manager, id);
-    if (window == NULL || !window_geometry_valid(geometry)) {
+    if (window == NULL || !window_geometry_valid(geometry) ||
+        (window->surface != NULL &&
+         (window->surface->width != geometry.width ||
+          window->surface->height != geometry.height))) {
         return false;
     }
     window->geometry = geometry;
+    return true;
+}
+
+bool window_attach_surface(struct window_manager *manager, WindowId id,
+                           struct surface *surface)
+{
+    struct window *window = window_get(manager, id);
+    if (window == NULL) {
+        return false;
+    }
+    if (surface != NULL &&
+        (!surface_valid(surface) || surface->width != window->geometry.width ||
+         surface->height != window->geometry.height)) {
+        return false;
+    }
+    window->surface = surface;
     return true;
 }
 

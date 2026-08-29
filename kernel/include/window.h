@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "surface.h"
+
 typedef uint32_t WindowId;
 
 #define WINDOW_ID_NONE ((WindowId)0)
@@ -38,6 +40,7 @@ struct window {
     bool focused;
     bool minimized;
     bool occupied;
+    struct surface *surface;
 };
 
 struct window_manager {
@@ -61,6 +64,8 @@ const struct window *window_get_const(const struct window_manager *manager,
                                       WindowId id);
 bool window_set_geometry(struct window_manager *manager, WindowId id,
                          struct window_geometry geometry);
+bool window_attach_surface(struct window_manager *manager, WindowId id,
+                           struct surface *surface);
 
 /* Index zero is the bottom window. Raising preserves every other ordering. */
 const struct window *window_at_z(const struct window_manager *manager,

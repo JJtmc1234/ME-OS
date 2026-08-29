@@ -211,10 +211,11 @@ run-serial: $(ISO) $(OVMF_LOCAL)
 # framebuffer. Catches an out of bounds write without booting anything.
 HOST_TEST_FLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include
 
-$(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c
+$(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c \
+                         kernel/src/surface.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) \
-		tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c -o $@
+		tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c kernel/src/surface.c -o $@
 
 # mouse.c compiles on the host because only its pure decoding is called here.
 # Nothing in this test touches a port.
@@ -245,13 +246,21 @@ $(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/geometry_test.c kernel/src/geometry.c -o $@ -lm
 
-$(BUILD)/window_test: tests/window_test.c kernel/src/window.c
+$(BUILD)/window_test: tests/window_test.c kernel/src/window.c kernel/src/surface.c kernel/src/font.c
 	@mkdir -p $(BUILD)
-	$(CC) $(HOST_TEST_FLAGS) tests/window_test.c kernel/src/window.c -o $@
+	$(CC) $(HOST_TEST_FLAGS) tests/window_test.c kernel/src/window.c \
+		kernel/src/surface.c kernel/src/font.c -o $@
+
+$(BUILD)/surface_test: tests/surface_test.c kernel/src/surface.c kernel/src/font.c \
+                       kernel/src/window.c kernel/src/compositor.c kernel/src/cursor.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/surface_test.c kernel/src/surface.c \
+		kernel/src/font.c kernel/src/window.c kernel/src/compositor.c \
+		kernel/src/cursor.c -o $@
 
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
            $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
-           $(BUILD)/geometry_test $(BUILD)/window_test
+           $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -260,6 +269,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/kbd_test
 	$(BUILD)/geometry_test
 	$(BUILD)/window_test
+	$(BUILD)/surface_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

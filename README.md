@@ -30,9 +30,10 @@ to a disk or a USB device.
 | M10 edge wrapping | Arrow-key movement wraps at all four corridor edges | Verified software milestone, QEMU |
 | M11 click and drag rectangle | The rectangle follows the pointer while held | Verified software milestone, QEMU |
 | M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Verified software milestone, QEMU |
-| M14 window surfaces and compositor | Window-local drawing and ordered framebuffer composition | Next |
+| M14 window surfaces and compositor | Window-local drawing and ordered framebuffer composition | Verified software milestone, QEMU |
+| M15 focus and event queues | Focused input routed as bounded per-window events | Next |
 
-All thirteen finished milestones are checked automatically. `make test` boots the image
+All fourteen finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -57,8 +58,9 @@ backspace and tab.
 lines of text unchanged. It is static: nothing moves it.
 
 **M4.** A cursor is drawn, and moving the mouse moves it. It stays inside the
-screen, keeps its shape, and puts back whatever it covered when it moves on.
-Nothing follows it and nothing can be dragged.
+screen and keeps its shape. Since M14 it is the compositor's final overlay
+rather than an app-owned framebuffer patch. Nothing follows it and nothing can
+be dragged.
 
 **M5.** The rectangle crosses the screen at sixty pixels a second, turning
 around at each edge. It moves at a rate rather than at whatever speed this
@@ -111,12 +113,24 @@ pointer movement leaves it behind. Clicking the background does nothing.
 geometry, titles, lifetime and deterministic z-order. The current kernel has no
 allocator, so the manager uses a bounded pool of eight slots and fails safely
 when full. IDs are not slot numbers, which keeps this temporary storage choice
-out of callers. M14 gives the objects software surfaces and makes them visible.
+out of callers.
+
+**M14.** Windows own or reference independent, externally backed software
+surfaces. Demo contains all pre-window graphics in its own local coordinates;
+System is a second opaque surface above it. The compositor clears a desktop
+surface, copies visible window portions from bottom to top with clipping, draws
+the cursor as its own final overlay, and presents that one result to the
+framebuffer. Apps no longer draw into arbitrary framebuffer regions.
+
+Backing stores are bounded static arrays because there is still no allocator.
+Attaching a surface requires an exact geometry match, and an attached window
+cannot be resized implicitly. M17 will define real resize/reallocation
+semantics rather than hiding that decision here.
 
 **M12.** A triangle turns about its own centre, below everything else on the
-screen, at a fixed speed driven by the same clock the rectangle uses. It is
-drawn as three lines, in software, straight into the framebuffer: there is no
-graphics acceleration of any kind and none is planned.
+Demo surface, at a fixed speed driven by the same clock the rectangle uses. It
+is drawn as three software lines: there is no graphics acceleration of any
+kind and none is planned.
 
 This is the milestone where the kernel gained floating point. x86-64 guarantees
 SSE2, so the kernel enables that and nothing else, after checking CPUID for it.
@@ -209,7 +223,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
-                  floating point, geometry,
+                  floating point, geometry, window, surface, compositor,
                   timer, rectangle, calculator, variables, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)

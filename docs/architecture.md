@@ -10,7 +10,10 @@ flowchart LR
     FW[UEFI firmware, OVMF in QEMU] --> LIM[Limine]
     LIM --> KRN[kernel.elf, ELF64, higher half]
     KRN --> MAIN[kmain]
-    MAIN --> FB[framebuffer]
+    MAIN --> WM[window manager]
+    WM --> SURF[window surfaces]
+    SURF --> COMP[software compositor]
+    COMP --> FB[framebuffer]
     MAIN --> KBD[PS/2 keyboard]
     MAIN --> LOG[debug port and COM1]
 ```
@@ -30,13 +33,13 @@ references them and `--gc-sections` would otherwise discard them.
 
 | Module | Responsibility |
 | --- | --- |
-| `main.c` | milestone logic: what gets drawn, and the input loop |
-| `fb.c` | linear framebuffer: clear, fill a rectangle, draw a line, draw a string |
+| `main.c` | Demo logic, window/surface setup, presentation and the polled input loop |
+| `fb.c` | checked linear framebuffer access and presentation of a composed surface |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
 | `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift and the arrow keys |
 | `mouse.c` | polled PS/2 mouse: port I/O, packet assembly, and pure decoding |
 | `pointer.c` | where the pointer is, and clamping it to the screen |
-| `cursor.c` | drawing the cursor, and putting back what it covered |
+| `cursor.c` | drawing the compositor-owned cursor overlay into a surface |
 | `timer.c` | elapsed time, polled from the programmable interval timer |
 | `rect.c` | rectangle timing, wrapping, hit testing and pointer-drag state |
 | `calc.c` | parsing and evaluating a typed sum, conditional or assignment, with checked arithmetic |
@@ -44,6 +47,8 @@ references them and `--gc-sections` would otherwise discard them.
 | `fpu.c` | turning SSE on, and nothing else: no arithmetic lives here |
 | `geometry.c` | sine, cosine, rotation and the turning triangle. The only file with floating point in it |
 | `window.c` | stable window IDs, bounded object lifetime, geometry, z-order and hit testing |
+| `surface.c` | externally backed local pixel drawing, clipping and opaque blits |
+| `compositor.c` | desktop clear and bottom-to-top composition of window surfaces |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
 | `mem.c` | memset, memcpy, memmove, memcmp |
 
@@ -97,8 +102,8 @@ that quietly stops being true.
 
 `fpu.c` holds the control register work and no arithmetic. `geometry.c` holds
 the arithmetic and knows nothing about control registers. The drawing is done
-in software, straight into the framebuffer: there is no graphics acceleration
-anywhere in this kernel.
+in software into Demo's surface and copied by the compositor: there is no
+graphics acceleration anywhere in this kernel.
 
 **Time comes from a counter, not from the loop.** The PIT's channel 0 counts
 down and wraps about every 55 milliseconds. The loop reads it, adds up the
@@ -109,11 +114,10 @@ wrap, which is exactly the kind of fault that hides in a short look at an
 emulator. The leftover time between whole pixels is carried, so a thousand small
 steps land where one large step would.
 
-**The cursor saves what it covers.** There is no second buffer to draw into, so
-the cursor keeps a copy of the pixels underneath and puts them back before it
-moves. Anything else that draws has to hide the cursor first, or that copy goes
-stale and the cursor smears the old picture back over the new one. That is one
-rule to remember, and it is why `draw_key_line` hides and reshows it.
+**The cursor is a compositor overlay.** M14 draws the arrow last into the
+composed desktop surface, after every window. Pointer movement asks for another
+presentation. Apps neither own the cursor nor need to hide it before updating
+their surfaces, and the old direct-framebuffer saved-patch scheme is gone.
 
 **Window identity is separate from storage.** M13 has no allocator to build on,
 so `window_manager` uses eight fixed slots. Callers never name those slots:
@@ -121,6 +125,24 @@ they create, retrieve, raise and destroy windows through stable `WindowId`
 values and an explicit z-order. This is a bounded implementation stepping
 stone, not a claim that the kernel has dynamic memory. A future allocator can
 replace the storage without changing the public lifetime rules.
+
+**Apps draw locally; the compositor owns presentation.** Each window may attach
+an opaque `surface` with dimensions equal to its geometry. Drawing primitives
+take local signed coordinates and clip at the surface boundaries. Demo owns all
+existing text, rectangle, calculator and triangle content. System owns a
+separate coloured surface. Neither is given a framebuffer pointer.
+
+`compositor_compose` clears the desktop, walks the manager's explicit
+bottom-to-top order, skips minimized windows and clips each opaque blit against
+the desktop. The cursor is applied after the windows, and `fb_present` is the
+single path from that composed surface into the linear framebuffer. Attached
+surfaces currently prevent geometry resizing; M17 must define replacement
+backing-store semantics explicitly.
+
+There is still no allocator. Desktop, Demo and System use bounded static pixel
+stores, just as window objects use a bounded pool. The API separates surfaces
+from their backing memory so allocator-backed stores can replace these arrays
+without letting apps draw arbitrary framebuffer regions.
 
 **Framebuffer assumptions are checked, not assumed.** `fb_init` refuses a null
 address, a bits per pixel other than 32, a zero dimension, a pitch smaller than
@@ -133,10 +155,11 @@ hardware. COM1 at `0x3F8` is a real serial port, so the same log will be visible
 on a physical machine or through `qemu -serial`. Serial writes spin a bounded
 number of times, so a missing UART cannot hang the boot.
 
-**Drawing is direct.** There is no console, scrolling, off-screen surface or
-input event buffer yet. `main.c` decides where each element goes and redraws
-the region it owns. M13 onward replaces this with window-owned state, surfaces
-and routed events in small steps.
+**Input routing is the next boundary.** There is no console, scrolling or input
+event buffer yet. M14 completes the drawing path, but `main.c` still consumes
+raw polled keyboard/mouse state and calls Demo logic directly. M15 adds bounded
+per-window queues, focus and target routing without turning device drivers into
+app APIs.
 
 ## Testing without a screen
 
@@ -144,8 +167,10 @@ and routed events in small steps.
 captures the framebuffer through the QEMU monitor, injects keyboard and mouse
 input, and quits. `tests/check_boot.py` reads the captures as pixel data and
 checks every completed visual milestone: text, arithmetic, the cursor, timed
-movement, steering, wrapping, dragging and the rotating triangle. It also
-checks both log sinks for the kernel's own record of those actions.
+movement, steering, wrapping, dragging and the rotating triangle. It samples
+desktop, Demo and System pixels at known regions to prove opaque overlap and
+z-order, and checks both log sinks for the kernel's own record of those
+actions.
 
 That is a real check of what the kernel drew, not just that it compiled. It
 still does not replace a person watching it boot once.

@@ -1,26 +1,17 @@
-/* Drawing the pointer.
- *
- * There is no second buffer to draw into, so the cursor saves the pixels it
- * covers and puts them back before it moves. Anything else that draws must
- * hide the cursor first, or the saved pixels go stale and the cursor smears
- * the old picture back over the new one.
- */
+/* Drawing the compositor-owned pointer into a software surface. */
 #ifndef ME_CURSOR_H
 #define ME_CURSOR_H
 
-#include <stdbool.h>
 #include <stdint.h>
+
+#include "surface.h"
 
 #define CURSOR_WIDTH  8
 #define CURSOR_HEIGHT 12
 
-/* Draws the cursor at x, y, saving what was underneath. Does nothing if it is
- * already drawn somewhere: hide it first. */
-void cursor_show(uint64_t x, uint64_t y, uint32_t fill, uint32_t outline);
-
-/* Puts back what the cursor covered. Safe to call when nothing is drawn. */
-void cursor_hide(void);
-
-bool cursor_visible(void);
+/* Draws a clipped arrow in surface-local coordinates. The cursor is an
+ * overlay on the composed desktop, never an app-owned framebuffer patch. */
+void cursor_draw(struct surface *surface, int64_t x, int64_t y,
+                 uint32_t fill, uint32_t outline);
 
 #endif /* ME_CURSOR_H */

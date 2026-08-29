@@ -15,15 +15,18 @@
  * M9: steer the rectangle with the arrow keys.
  * M10: wrap the steered rectangle at each edge of its safe corridor.
  * M11: pick the rectangle up with the left mouse button and drag it.
+ * M13: create stable window objects in deterministic z-order.
+ * M14: draw into per-window surfaces and composite them over a desktop.
  *
- * Everything is drawn directly to the framebuffer. There is no console, no
- * scrolling, and no input buffer, on purpose: each milestone adds one small
- * capability that can be demonstrated on its own.
+ * Demo owns every earlier graphic in local coordinates. The compositor alone
+ * presents window surfaces and the cursor to the framebuffer. There is no
+ * console, scrolling or input event buffer yet.
  */
 #include <stddef.h>
 #include <stdint.h>
 
 #include "calc.h"
+#include "compositor.h"
 #include "cursor.h"
 #include "fb.h"
 #include "fpu.h"
@@ -35,6 +38,7 @@
 #include "mouse.h"
 #include "pointer.h"
 #include "rect.h"
+#include "surface.h"
 #include "timer.h"
 #include "vars.h"
 #include "window.h"
@@ -77,6 +81,20 @@
 #define M4_CURSOR_START_X_DIVISOR 4
 #define M4_CURSOR_START_Y_DIVISOR 6
 
+/* M14 fixed backing stores. The desktop store supports the QEMU resolutions
+ * used by this project; window stores exactly match their current objects.
+ * These are explicit bounded pools until a real allocator exists. */
+#define DESKTOP_MAX_WIDTH  1920u
+#define DESKTOP_MAX_HEIGHT 1080u
+#define DEMO_X 40
+#define DEMO_Y 40
+#define DEMO_WIDTH 1180u
+#define DEMO_HEIGHT 720u
+#define SYSTEM_X 860
+#define SYSTEM_Y 80
+#define SYSTEM_WIDTH 300u
+#define SYSTEM_HEIGHT 180u
+
 /* Limine scans the executable for these structures, so they must survive
  * optimisation and stay inside the section the linker script keeps. */
 __attribute__((used, section(".limine_requests")))
@@ -103,6 +121,9 @@ static uint32_t colour_background;
 static uint32_t colour_rect;
 static uint64_t sum_line_y;
 static uint32_t colour_triangle;
+static uint32_t colour_desktop;
+static uint32_t colour_system;
+static uint32_t colour_accent;
 static struct triangle_screen triangle_drawn;
 static bool triangle_showing;
 static struct moving_rect rect_drawn;
@@ -120,6 +141,13 @@ static bool mouse_left_down;
 static struct window_manager window_manager;
 static WindowId demo_window_id;
 static WindowId system_window_id;
+static struct surface desktop_surface;
+static struct surface demo_surface;
+static struct surface system_surface;
+static bool desktop_cursor_visible;
+static uint32_t desktop_pixels[DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT];
+static uint32_t demo_pixels[DEMO_WIDTH * DEMO_HEIGHT];
+static uint32_t system_pixels[SYSTEM_WIDTH * SYSTEM_HEIGHT];
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -171,7 +199,22 @@ static uint64_t pick_scale(uint64_t screen_w, uint64_t text_chars)
 static uint64_t centred_x(uint64_t chars, uint64_t scale)
 {
     uint64_t width = chars * FONT_WIDTH * scale;
-    return width < fb_width() ? (fb_width() - width) / 2 : 0;
+    return width < demo_surface.width ? (demo_surface.width - width) / 2 : 0;
+}
+
+/* Apps update only their own surfaces. This is the one path from those
+ * surfaces to the framebuffer; the cursor is drawn last as a compositor-owned
+ * overlay in the desktop surface. */
+static void present_desktop(void)
+{
+    if (!compositor_compose(&window_manager, &desktop_surface, colour_desktop)) {
+        fail("could not compose the desktop");
+    }
+    if (desktop_cursor_visible) {
+        cursor_draw(&desktop_surface, pointer_state.x, pointer_state.y,
+                    colour_cursor, colour_background);
+    }
+    fb_present(&desktop_surface);
 }
 
 /* Replaces the key line. The whole line is cleared first, so a shorter
@@ -179,23 +222,13 @@ static uint64_t centred_x(uint64_t chars, uint64_t scale)
 static void draw_key_line(const char *text)
 {
     const uint64_t height = FONT_HEIGHT * key_line_scale;
-    const bool had_cursor = cursor_visible();
 
-    /* The cursor holds a copy of the pixels underneath it. Drawing over them
-     * while it is up would make that copy stale, and hiding it later would
-     * smear the old line back over the new one. */
-    if (had_cursor) {
-        cursor_hide();
-    }
-
-    fb_fill_rect(0, key_line_y, fb_width(), height, colour_background);
-    fb_draw_string(text, centred_x(str_len(text), key_line_scale),
-                   key_line_y, colour_text, key_line_scale);
-
-    if (had_cursor) {
-        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                    colour_cursor, colour_background);
-    }
+    surface_fill_rect(&demo_surface, 0, (int64_t)key_line_y,
+                      demo_surface.width, (uint32_t)height, colour_background);
+    surface_draw_string(&demo_surface, text,
+                        (int64_t)centred_x(str_len(text), key_line_scale),
+                        (int64_t)key_line_y, colour_text, (uint32_t)key_line_scale);
+    present_desktop();
 }
 
 /* Erases the rectangle's old row and draws it at its current position. Only
@@ -203,51 +236,35 @@ static void draw_key_line(const char *text)
  * text, so nothing else has to be redrawn. */
 static void draw_rect(void)
 {
-    const bool had_cursor = cursor_visible();
-
-    if (had_cursor) {
-        cursor_hide();
-    }
-
     /* Erase exactly where it was, not the whole row. Since M9 it can move up
      * and down as well, so the old place is not always on the same line. */
     if (rect_showing) {
-        fb_fill_rect((uint64_t)rect_drawn.x, (uint64_t)rect_drawn.y,
-                     rect_drawn.width, rect_drawn.height, colour_background);
+        surface_fill_rect(&demo_surface, rect_drawn.x, rect_drawn.y,
+                          (uint32_t)rect_drawn.width, (uint32_t)rect_drawn.height,
+                          colour_background);
     }
-    fb_fill_rect((uint64_t)rect_state.x, (uint64_t)rect_state.y,
-                 rect_state.width, rect_state.height, colour_rect);
+    surface_fill_rect(&demo_surface, rect_state.x, rect_state.y,
+                      (uint32_t)rect_state.width, (uint32_t)rect_state.height,
+                      colour_rect);
     rect_drawn = rect_state;
     rect_showing = true;
-
-    if (had_cursor) {
-        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                    colour_cursor, colour_background);
-    }
+    present_desktop();
 }
 
-/* Redraws the sum line. Same rule as every other drawing routine: the cursor
- * holds a copy of the pixels underneath it, so it comes down first. */
+/* Redraws the sum line in Demo-local coordinates. */
 static void draw_sum_line(void)
 {
     char line[CALC_MAX_INPUT + CALC_MAX_NUMBER + 2];
     const uint64_t height = FONT_HEIGHT * key_line_scale;
-    const bool had_cursor = cursor_visible();
 
     calc_line(&calc_state, line, sizeof line);
 
-    if (had_cursor) {
-        cursor_hide();
-    }
-
-    fb_fill_rect(0, sum_line_y, fb_width(), height, colour_background);
-    fb_draw_string(line, centred_x(str_len(line), key_line_scale),
-                   sum_line_y, colour_text, key_line_scale);
-
-    if (had_cursor) {
-        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                    colour_cursor, colour_background);
-    }
+    surface_fill_rect(&demo_surface, 0, (int64_t)sum_line_y,
+                      demo_surface.width, (uint32_t)height, colour_background);
+    surface_draw_string(&demo_surface, line,
+                        (int64_t)centred_x(str_len(line), key_line_scale),
+                        (int64_t)sum_line_y, colour_text, (uint32_t)key_line_scale);
+    present_desktop();
 }
 
 static bool same_name(const char *a, const char *b)
@@ -287,34 +304,26 @@ static void stroke_triangle(const struct triangle_screen *shape, uint32_t colour
 {
     for (int i = 0; i < TRIANGLE_VERTICES; i++) {
         const int next = (i + 1) % TRIANGLE_VERTICES;
-        fb_draw_line(shape->x[i], shape->y[i], shape->x[next], shape->y[next], colour);
+        surface_draw_line(&demo_surface,
+                          shape->x[i], shape->y[i],
+                          shape->x[next], shape->y[next], colour);
     }
 }
 
-/* Erases where the triangle was, draws where it is now. Same cursor rule as
- * every other drawing routine: the cursor holds a copy of the pixels
- * underneath it, so it comes down first. */
+/* Erases where the triangle was and draws where it is now. */
 static void redraw_triangle(void)
 {
     struct triangle_screen now;
-    const bool had_cursor = cursor_visible();
 
     triangle_vertices(&now);
 
-    if (had_cursor) {
-        cursor_hide();
-    }
     if (triangle_showing) {
         stroke_triangle(&triangle_drawn, colour_background);
     }
     stroke_triangle(&now, colour_triangle);
-    if (had_cursor) {
-        cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                    colour_cursor, colour_background);
-    }
-
     triangle_drawn = now;
     triangle_showing = true;
+    present_desktop();
 }
 
 static void show_key(const struct kbd_key *key)
@@ -374,16 +383,17 @@ void kmain(void)
     log_dec(fb_height());
     log_str(" bpp 32\n");
 
-    /* M13: two real window objects, not yet used for drawing. M14 gives them
-     * surfaces and makes the compositor visible. Keeping creation here already
-     * exercises the same lifetime and stable-ID path the visible system uses. */
+    /* M13 objects become the visible M14 Demo and System windows through the
+     * same stable-ID and attachment paths future callers will use. */
     window_manager_init(&window_manager);
     const struct window_spec demo_window = {
-        .geometry = { .x = 80, .y = 70, .width = 900, .height = 620 },
+        .geometry = { .x = DEMO_X, .y = DEMO_Y,
+                      .width = DEMO_WIDTH, .height = DEMO_HEIGHT },
         .title = "Demo",
     };
     const struct window_spec system_window = {
-        .geometry = { .x = 720, .y = 140, .width = 360, .height = 240 },
+        .geometry = { .x = SYSTEM_X, .y = SYSTEM_Y,
+                      .width = SYSTEM_WIDTH, .height = SYSTEM_HEIGHT },
         .title = "System",
     };
     if (!window_create(&window_manager, &demo_window, &demo_window_id) ||
@@ -401,21 +411,53 @@ void kmain(void)
     colour_rect = fb_rgb(60, 170, 220);
     colour_cursor = fb_rgb(255, 214, 64);
     colour_triangle = fb_rgb(80, 220, 120);
-    fb_clear(colour_background);
+    colour_desktop = fb_rgb(18, 24, 38);
+    colour_system = fb_rgb(34, 46, 70);
+    colour_accent = fb_rgb(82, 190, 220);
+
+    if (fb_width() > DESKTOP_MAX_WIDTH || fb_height() > DESKTOP_MAX_HEIGHT ||
+        !surface_init(&desktop_surface, desktop_pixels,
+                      DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT,
+                      (uint32_t)fb_width(), (uint32_t)fb_height()) ||
+        !surface_init(&demo_surface, demo_pixels,
+                      DEMO_WIDTH * DEMO_HEIGHT, DEMO_WIDTH, DEMO_HEIGHT) ||
+        !surface_init(&system_surface, system_pixels,
+                      SYSTEM_WIDTH * SYSTEM_HEIGHT, SYSTEM_WIDTH, SYSTEM_HEIGHT) ||
+        !window_attach_surface(&window_manager, demo_window_id, &demo_surface) ||
+        !window_attach_surface(&window_manager, system_window_id, &system_surface)) {
+        fail("could not create the M14 software surfaces");
+    }
+
+    surface_clear(&demo_surface, colour_background);
+    surface_draw_string(&demo_surface, "DEMO", 12, 12, colour_accent, 2);
+    surface_clear(&system_surface, colour_system);
+    surface_fill_rect(&system_surface, 0, 0, SYSTEM_WIDTH, 28, colour_accent);
+    surface_draw_string(&system_surface, "SYSTEM", 12, 8,
+                        colour_desktop, 1);
+    surface_draw_string(&system_surface, "WINDOW SURFACES", 20, 62,
+                        colour_accent, 1);
+    surface_draw_string(&system_surface, "OPAQUE COMPOSITOR", 20, 92,
+                        colour_accent, 1);
+    present_desktop();
+    log_stage("M14 compositor ready with two overlapping windows");
 
     /* M1: the message, centred, exactly as the milestone specifies. */
     const uint64_t chars = str_len(M1_MESSAGE);
-    const uint64_t scale = pick_scale(fb_width(), chars);
+    const uint64_t scale = pick_scale(demo_surface.width, chars);
     const uint64_t text_h = FONT_HEIGHT * scale;
-    const uint64_t y = text_h < fb_height() ? (fb_height() - text_h) / 2 : 0;
+    const uint64_t y = text_h < demo_surface.height
+        ? (demo_surface.height - text_h) / 2 : 0;
 
-    fb_draw_string(M1_MESSAGE, centred_x(chars, scale), y, colour_text, scale);
+    surface_draw_string(&demo_surface, M1_MESSAGE,
+                        (int64_t)centred_x(chars, scale), (int64_t)y,
+                        colour_text, (uint32_t)scale);
+    present_desktop();
     log_stage("drew the M1 message");
 
     /* M2: one line below, left blank until a key arrives. */
     key_line_scale = scale;
     key_line_y = y + text_h * 2;
-    if (key_line_y + FONT_HEIGHT * key_line_scale >= fb_height()) {
+    if (key_line_y + FONT_HEIGHT * key_line_scale >= demo_surface.height) {
         key_line_scale = 1;
         key_line_y = y + text_h + FONT_HEIGHT;
     }
@@ -423,12 +465,13 @@ void kmain(void)
 
     /* M3: a filled rectangle below the key line, or above the message if the
      * screen is too short for it to fit underneath. */
-    const uint64_t rect_w = fb_width() / M3_RECT_WIDTH_DIVISOR;
-    const uint64_t rect_h = fb_height() / M3_RECT_HEIGHT_DIVISOR;
-    const uint64_t rect_x = rect_w < fb_width() ? (fb_width() - rect_w) / 2 : 0;
+    const uint64_t rect_w = demo_surface.width / M3_RECT_WIDTH_DIVISOR;
+    const uint64_t rect_h = demo_surface.height / M3_RECT_HEIGHT_DIVISOR;
+    const uint64_t rect_x = rect_w < demo_surface.width
+        ? (demo_surface.width - rect_w) / 2 : 0;
     uint64_t rect_y = key_line_y + FONT_HEIGHT * key_line_scale * 2;
 
-    if (rect_y + rect_h >= fb_height()) {
+    if (rect_y + rect_h >= demo_surface.height) {
         rect_y = y > rect_h * 2 ? y - rect_h * 2 : 0;
     }
 
@@ -446,12 +489,16 @@ void kmain(void)
      * A wider range would need something that can repaint what was underneath,
      * which no milestone has asked for yet. */
     rect_min_y = (int64_t)(key_line_y + FONT_HEIGHT * key_line_scale + M9_CLEARANCE);
-    rect_max_y = (int64_t)(fb_height() * M12_CENTRE_Y_PARTS / M12_CENTRE_Y_DIVISOR)
-               - (int64_t)(fb_height() / M12_RADIUS_DIVISOR)
+    rect_max_y = (int64_t)(demo_surface.height * M12_CENTRE_Y_PARTS /
+                           M12_CENTRE_Y_DIVISOR)
+               - (int64_t)(demo_surface.height / M12_RADIUS_DIVISOR)
                - (int64_t)rect_h - M9_CLEARANCE;
     if (rect_max_y < rect_min_y) {
         rect_max_y = rect_min_y;
     }
+    /* Begin at the corridor's top so M9 can demonstrate three ordinary down
+     * steps before the next press deliberately demonstrates M10 wrapping. */
+    rect_state.y = rect_min_y;
 
     draw_rect();
     log_str("me-os: rectangle may be steered between y ");
@@ -464,9 +511,9 @@ void kmain(void)
     log_str("x");
     log_dec(rect_h);
     log_str(" at ");
-    log_dec(rect_x);
+    log_dec((uint64_t)rect_state.x);
     log_str(",");
-    log_dec(rect_y);
+    log_dec((uint64_t)rect_state.y);
     log_str("\n");
 
     /* M6: the sum line, above the message, in the emptier half of the screen. */
@@ -508,10 +555,13 @@ void kmain(void)
      * anything in geometry.c runs. If the processor will not do SSE the kernel
      * carries on without a triangle rather than faulting. */
     if (fpu_init()) {
-        const int32_t triangle_x = (int32_t)(fb_width() / M12_CENTRE_X_DIVISOR);
+        const int32_t triangle_x =
+            (int32_t)(demo_surface.width / M12_CENTRE_X_DIVISOR);
         const int32_t triangle_y =
-            (int32_t)(fb_height() * M12_CENTRE_Y_PARTS / M12_CENTRE_Y_DIVISOR);
-        const int32_t triangle_r = (int32_t)(fb_height() / M12_RADIUS_DIVISOR);
+            (int32_t)(demo_surface.height * M12_CENTRE_Y_PARTS /
+                      M12_CENTRE_Y_DIVISOR);
+        const int32_t triangle_r =
+            (int32_t)(demo_surface.height / M12_RADIUS_DIVISOR);
 
         triangle_init(triangle_x, triangle_y, triangle_r);
         redraw_triangle();
@@ -527,8 +577,8 @@ void kmain(void)
         log_stage("no SSE, running without the M12 triangle");
     }
 
-    cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                colour_cursor, colour_background);
+    desktop_cursor_visible = true;
+    present_desktop();
     log_str("me-os: drew the M4 cursor at ");
     log_dec((uint64_t)pointer_state.x);
     log_str(",");
@@ -562,7 +612,8 @@ void kmain(void)
                     rect_state.speed = 0;
                     log_stage("the rectangle is being steered, so it stopped drifting");
                 }
-                if (rect_nudge(&rect_state, dx, dy, fb_width(), rect_min_y, rect_max_y)) {
+                if (rect_nudge(&rect_state, dx, dy, demo_surface.width,
+                               rect_min_y, rect_max_y)) {
                     draw_rect();
                     log_str("me-os: rectangle moved to ");
                     log_dec((uint64_t)rect_state.x);
@@ -597,7 +648,7 @@ void kmain(void)
          * passed. */
         const uint64_t elapsed = timer_poll();
 
-        if (rect_advance(&rect_state, elapsed, TIMER_HZ, fb_width())) {
+        if (rect_advance(&rect_state, elapsed, TIMER_HZ, demo_surface.width)) {
             draw_rect();
         }
         if (fpu_ready() && triangle_advance(elapsed, TIMER_HZ)) {
@@ -611,17 +662,23 @@ void kmain(void)
             const bool pressed = movement.left && !mouse_left_down;
             const bool released = !movement.left && mouse_left_down;
             bool rectangle_changed = false;
+            const struct window *demo =
+                window_get_const(&window_manager, demo_window_id);
+            const int64_t local_pointer_x =
+                pointer_state.x - (demo == NULL ? 0 : demo->geometry.x);
+            const int64_t local_pointer_y =
+                pointer_state.y - (demo == NULL ? 0 : demo->geometry.y);
 
             if (pressed && rect_drag_begin(&rect_drag_state, &rect_state,
-                                           pointer_state.x, pointer_state.y)) {
+                                           local_pointer_x, local_pointer_y)) {
                 rect_state.speed = 0;
                 log_stage("rectangle drag started");
             }
             if (movement.left && rect_drag_state.active) {
                 rectangle_changed = rect_drag_move(
                     &rect_drag_state, &rect_state,
-                    pointer_state.x, pointer_state.y,
-                    fb_width(), rect_min_y, rect_max_y);
+                    local_pointer_x, local_pointer_y,
+                    demo_surface.width, rect_min_y, rect_max_y);
             }
             if (released && rect_drag_end(&rect_drag_state)) {
                 log_stage("rectangle drag ended");
@@ -636,9 +693,7 @@ void kmain(void)
                 log_dec((uint64_t)rect_state.y);
                 log_str("\n");
             } else if (pointer_changed) {
-                cursor_hide();
-                cursor_show((uint64_t)pointer_state.x, (uint64_t)pointer_state.y,
-                            colour_cursor, colour_background);
+                present_desktop();
             }
         }
         /* Hints to the processor that this is a spin loop. Interrupts are

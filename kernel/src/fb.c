@@ -165,3 +165,20 @@ void fb_draw_string(const char *s, uint64_t x, uint64_t y,
         draw_char(s[i], x + i * FONT_WIDTH * scale, y, colour, scale);
     }
 }
+
+void fb_present(const struct surface *surface)
+{
+    if (!surface_valid(surface)) {
+        return;
+    }
+    const uint64_t height = surface->height < fb_h ? surface->height : fb_h;
+    const uint64_t width = surface->width < fb_w ? surface->width : fb_w;
+    for (uint64_t y = 0; y < height; y++) {
+        volatile uint32_t *destination =
+            (volatile uint32_t *)(fb_base + y * fb_pitch);
+        const uint32_t *source = surface->pixels + (size_t)y * surface->stride;
+        for (uint64_t x = 0; x < width; x++) {
+            destination[x] = source[x];
+        }
+    }
+}
