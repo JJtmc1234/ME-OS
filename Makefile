@@ -246,21 +246,28 @@ $(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/geometry_test.c kernel/src/geometry.c -o $@ -lm
 
-$(BUILD)/window_test: tests/window_test.c kernel/src/window.c kernel/src/surface.c kernel/src/font.c
+$(BUILD)/window_test: tests/window_test.c kernel/src/window.c kernel/src/event.c \
+                      kernel/src/surface.c kernel/src/font.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/window_test.c kernel/src/window.c \
-		kernel/src/surface.c kernel/src/font.c -o $@
+		kernel/src/event.c kernel/src/surface.c kernel/src/font.c -o $@
 
 $(BUILD)/surface_test: tests/surface_test.c kernel/src/surface.c kernel/src/font.c \
-                       kernel/src/window.c kernel/src/compositor.c kernel/src/cursor.c
+                       kernel/src/window.c kernel/src/compositor.c kernel/src/cursor.c \
+                       kernel/src/event.c
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/surface_test.c kernel/src/surface.c \
 		kernel/src/font.c kernel/src/window.c kernel/src/compositor.c \
-		kernel/src/cursor.c -o $@
+		kernel/src/cursor.c kernel/src/event.c -o $@
+
+$(BUILD)/event_test: tests/event_test.c kernel/src/event.c
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/event_test.c kernel/src/event.c -o $@
 
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
            $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
-           $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test
+           $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test \
+           $(BUILD)/event_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -270,6 +277,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/geometry_test
 	$(BUILD)/window_test
 	$(BUILD)/surface_test
+	$(BUILD)/event_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

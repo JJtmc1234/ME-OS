@@ -15,6 +15,9 @@ flowchart LR
     SURF --> COMP[software compositor]
     COMP --> FB[framebuffer]
     MAIN --> KBD[PS/2 keyboard]
+    MAIN --> MOUSE[PS/2 mouse]
+    MAIN --> EVT[window event queues]
+    EVT --> WM
     MAIN --> LOG[debug port and COM1]
 ```
 
@@ -33,7 +36,7 @@ references them and `--gc-sections` would otherwise discard them.
 
 | Module | Responsibility |
 | --- | --- |
-| `main.c` | Demo logic, window/surface setup, presentation and the polled input loop |
+| `main.c` | Demo logic, window/surface setup, presentation and device-to-event translation |
 | `fb.c` | checked linear framebuffer access and presentation of a composed surface |
 | `font.c` | 5x7 bitmap glyphs for A to Z, 0 to 9 and space |
 | `kbd.c` | polled PS/2 keyboard, scancode set 1, with shift and the arrow keys |
@@ -46,7 +49,8 @@ references them and `--gc-sections` would otherwise discard them.
 | `vars.c` | a fixed table of eight named whole numbers |
 | `fpu.c` | turning SSE on, and nothing else: no arithmetic lives here |
 | `geometry.c` | sine, cosine, rotation and the turning triangle. The only file with floating point in it |
-| `window.c` | stable window IDs, bounded object lifetime, geometry, z-order and hit testing |
+| `window.c` | stable window IDs, bounded lifetime, geometry, z-order, focus and input routing |
+| `event.c` | bounded per-window event FIFO with explicit overflow accounting |
 | `surface.c` | externally backed local pixel drawing, clipping and opaque blits |
 | `compositor.c` | desktop clear and bottom-to-top composition of window surfaces |
 | `log.c` | diagnostics to QEMU's debug port and to COM1 |
@@ -65,13 +69,14 @@ mouse are polled. The controller's status register says which device a waiting
 byte came from, so the two share one port without stealing each other's bytes.
 An IDT arrives when a milestone actually needs it.
 
-**Input state is separate from input effects.** `mouse.c` talks to the hardware
-and assembles packets, `pointer.c` holds the position and clamps it, and
-`cursor.c` draws it. `main.c` currently routes a left-button edge to the pure
-hit-test and drag state in `rect.c`; the device driver does not know what a
-rectangle is. A second input device would touch only the first layer, and a
-different cursor only the last. Decoding, clamping, hit testing and dragging
-are pure functions tested on an ordinary machine.
+**Input state is separate from input effects.** `kbd.c` and `mouse.c` talk to
+the hardware and decode device data, `pointer.c` holds the desktop position,
+and `main.c` translates that state into window events. `window.c` hit-tests,
+changes focus and z-order, converts mouse coordinates to window-local ones and
+routes keyboard events only to the focused queue. Demo then consumes only its
+own queue and applies its rectangle/calculator behavior. The drivers do not
+know what a window or rectangle is. Decoding, clamping, queues, hit testing,
+focus and routing are tested on an ordinary machine.
 
 **Arithmetic refuses rather than wraps.** Every operation in `calc.c` is
 checked before it happens: addition and subtraction against the limits,
@@ -144,6 +149,21 @@ stores, just as window objects use a bounded pool. The API separates surfaces
 from their backing memory so allocator-backed stores can replace these arrays
 without letting apps draw arbitrary framebuffer regions.
 
+**Events belong to windows, not devices.** Every window contains a 32-entry
+FIFO of `window_event` values. The current reliable set is mouse move/down/up,
+key down and focus gained/lost. Queue overflow drops the newest event and
+increments an observable counter; it never corrupts or silently reorders old
+input. A click targets the topmost visible window, focuses and raises it, and
+captures subsequent pointer events through release. A background click clears
+focus. Destroying a window also clears capture and makes its queued events
+unreachable through the invalidated stable ID.
+
+Keyboard releases are not exposed yet because the scancode decoder does not
+reliably produce them; the event API does not claim information the input
+stack discards. There is still no process or app-owner model. Queue ownership
+is attached to a window now so a future app boundary does not have to expose
+raw device drivers.
+
 **Framebuffer assumptions are checked, not assumed.** `fb_init` refuses a null
 address, a bits per pixel other than 32, a zero dimension, a pitch smaller than
 one row, or a pitch that is not a multiple of four. It packs colours from the
@@ -155,11 +175,11 @@ hardware. COM1 at `0x3F8` is a real serial port, so the same log will be visible
 on a physical machine or through `qemu -serial`. Serial writes spin a bounded
 number of times, so a missing UART cannot hang the boot.
 
-**Input routing is the next boundary.** There is no console, scrolling or input
-event buffer yet. M14 completes the drawing path, but `main.c` still consumes
-raw polled keyboard/mouse state and calls Demo logic directly. M15 adds bounded
-per-window queues, focus and target routing without turning device drivers into
-app APIs.
+**Window chrome is the next boundary.** M15 completes the first input-routing
+path, but windows still have no visible manager-owned frame, title bar, close
+control or whole-window drag behavior. M16 adds those without confusing Demo's
+existing app-local rectangle drag with movement of the window itself. Resizing
+remains M17 because it first needs explicit replacement backing-store semantics.
 
 ## Testing without a screen
 
@@ -169,8 +189,8 @@ input, and quits. `tests/check_boot.py` reads the captures as pixel data and
 checks every completed visual milestone: text, arithmetic, the cursor, timed
 movement, steering, wrapping, dragging and the rotating triangle. It samples
 desktop, Demo and System pixels at known regions to prove opaque overlap and
-z-order, and checks both log sinks for the kernel's own record of those
-actions.
+z-order, captures both focus targets to prove click-to-raise, and checks both
+log sinks for the kernel's own record of those actions.
 
 That is a real check of what the kernel drew, not just that it compiled. It
 still does not replace a person watching it boot once.

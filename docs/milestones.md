@@ -31,8 +31,8 @@ Nothing here has been booted on a physical machine yet.
 | M12 | Rotating triangle and floating point | SSE enabled deliberately, and a triangle turning about its own centre on a timer, drawn with lines | Verified software milestone |
 | M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Verified software milestone |
 | M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Verified software milestone |
-| M15 | Focus and event queues | Focused input is routed as bounded per-window events | Next |
-| M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Planned |
+| M15 | Focus and event queues | Focused input is routed as bounded per-window events | Verified software milestone |
+| M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Next |
 | M17 | Window resizing | Bounded live resizing with explicit surface semantics | Planned |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
@@ -174,6 +174,35 @@ are covered by host tests. The QEMU run samples desktop, Demo and System
 colours at their overlap and repeats every earlier visible regression across
 eighteen captures.
 
+## What M15 added
+
+`event.c` provides a bounded 32-entry FIFO for higher-level window events.
+Each window owns one queue. Overflow refuses and counts the newest event rather
+than overwriting an older event silently, and destroying a window makes all of
+its queued events unreachable with the same stable-ID lifetime rule as the
+rest of the object.
+
+`window.c` now owns focus and input targeting. A mouse press hit-tests from the
+top of z-order, focuses and raises that window, and captures the pointer until
+release. Mouse positions are translated from desktop coordinates into the
+target window's local coordinates. A desktop click clears focus; keyboard
+events go only to the focused window. Focus transitions are queued as
+`FOCUS_LOST` then `FOCUS_GAINED`, so consumers see deterministic ordering.
+
+The PS/2 drivers still decode only device data. `main.c` translates their
+polled state into `MOUSE_MOVE`, `MOUSE_DOWN`, `MOUSE_UP` and `KEY_DOWN` events,
+then Demo consumes only its own queue. There is no fabricated `KEY_UP`: the
+current keyboard decoder intentionally discards releases other than the shift
+state it needs internally. System has the same queue and targeting behavior
+even though it has no application logic yet.
+
+Host tests cover FIFO order, wraparound, explicit overflow, focus switching,
+overlap targeting, local coordinates, keyboard isolation, pointer capture,
+desktop focus clearing and destroying a window with queued input. The QEMU run
+adds two captures: one after clicking System and one after clicking Demo. Pixel
+samples prove Demo was raised over System, while both kernel logs record the
+focus transitions to window IDs 2 then 1.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -185,7 +214,7 @@ eighteen captures.
 
 ## Verification status
 
-M1 to M14 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M15 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -200,14 +229,17 @@ Two kinds of test run:
   and that the variable table stores, overwrites, refuses a name too many and
   leaves itself alone when a line is refused. Seven host programs cover these
   boundaries. An eighth program covers window IDs, object lifetime, geometry,
-  capacity, z-order and hit testing. A ninth covers local surfaces, clipping,
-  cursor overlay, composition, overlap and presentation guards.
+  capacity, z-order, hit testing, focus and input routing. A ninth covers local
+  surfaces, clipping, cursor overlay, composition, overlap and presentation
+  guards. A tenth covers event order, circular queue behavior and explicit
+  overflow.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
   what it stored, steers the rectangle across two edges, drags and releases it,
-  and inspects eighteen captured framebuffers: the sum line,
+  changes focus twice, and inspects twenty captured framebuffers: the sum line,
   the message, the key line, a rectangle that is whole, on screen and in a
   different place each time, and a cursor that starts in the right place,
   follows the mouse exactly, keeps its shape, and stays on screen.
   It also samples the desktop and two opaque overlapping windows to prove M14's
-  local surfaces and bottom-to-top composition.
+  local surfaces and bottom-to-top composition, then samples before and after
+  click-to-raise to prove M15's focus and targeting path.

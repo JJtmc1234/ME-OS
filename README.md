@@ -31,9 +31,10 @@ to a disk or a USB device.
 | M11 click and drag rectangle | The rectangle follows the pointer while held | Verified software milestone, QEMU |
 | M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Verified software milestone, QEMU |
 | M14 window surfaces and compositor | Window-local drawing and ordered framebuffer composition | Verified software milestone, QEMU |
-| M15 focus and event queues | Focused input routed as bounded per-window events | Next |
+| M15 focus and event queues | Focused input routed as bounded per-window events | Verified software milestone, QEMU |
+| M16 window chrome and dragging | Title bars, close controls and moving whole windows | Next |
 
-All fourteen finished milestones are checked automatically. `make test` boots the image
+All fifteen finished milestones are checked automatically. `make test` boots the image
 headlessly, injects a key press, moves the mouse, and inspects the resulting
 framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
 decoding, pointer clamping, arithmetic and the variable table on the
@@ -126,6 +127,18 @@ Backing stores are bounded static arrays because there is still no allocator.
 Attaching a surface requires an exact geometry match, and an attached window
 cannot be resized implicitly. M17 will define real resize/reallocation
 semantics rather than hiding that decision here.
+
+**M15.** Every window has a bounded queue of higher-level input and focus
+events. A click hit-tests the topmost visible window, focuses and raises it,
+and delivers local mouse coordinates; a held pointer remains captured until
+release. Keyboard input goes only to the focused window. Demo consumes only
+its own queue, so the PS/2 drivers are no longer its application API.
+
+The queue holds 32 events and explicitly drops the newest event when full,
+recording the dropped count. The current keyboard decoder reliably produces
+key-down events but not releases, so M15 does not invent key-up events. Clicking
+the desktop clears focus, and destroying a window invalidates its queued events
+and any pointer capture.
 
 **M12.** A triangle turns about its own centre, below everything else on the
 Demo surface, at a fixed speed driven by the same clock the rectangle uses. It
@@ -223,7 +236,7 @@ that does. Writing an image to the wrong device destroys whatever was on it.
 
 ```
 kernel/include/   headers: framebuffer, font, keyboard, mouse, pointer, cursor,
-                  floating point, geometry, window, surface, compositor,
+                  floating point, geometry, window, event, surface, compositor,
                   timer, rectangle, calculator, variables, logging, memory
 kernel/src/       the kernel itself, one small module per concern
 boot/             Limine license, and the fetched bootloader (not committed)

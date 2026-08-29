@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "event.h"
 #include "surface.h"
 
 typedef uint32_t WindowId;
@@ -41,6 +42,7 @@ struct window {
     bool minimized;
     bool occupied;
     struct surface *surface;
+    struct window_event_queue events;
 };
 
 struct window_manager {
@@ -48,6 +50,7 @@ struct window_manager {
     uint8_t z_slots[WINDOW_MAX];       /* bottom to top */
     size_t count;
     WindowId next_id;
+    WindowId pointer_capture;
 };
 
 bool window_geometry_valid(struct window_geometry geometry);
@@ -75,5 +78,22 @@ bool window_raise(struct window_manager *manager, WindowId id);
 /* Returns the topmost non-minimized window containing the point. */
 WindowId window_hit_test(const struct window_manager *manager,
                          int64_t x, int64_t y);
+
+/* Focus changes enqueue LOST/GAINED in that order. Click focus raises. */
+bool window_focus(struct window_manager *manager, WindowId id, bool raise);
+WindowId window_focused(const struct window_manager *manager);
+
+bool window_post_event(struct window_manager *manager, WindowId id,
+                       const struct window_event *event);
+bool window_next_event(struct window_manager *manager, WindowId id,
+                       struct window_event *event);
+
+/* Keyboard targets focus. Mouse coordinates are translated to window-local
+ * coordinates; a press captures movement and release for the same window. */
+WindowId window_route_key(struct window_manager *manager,
+                          const struct window_event *event);
+WindowId window_route_pointer(struct window_manager *manager,
+                              enum window_event_type type,
+                              int64_t x, int64_t y, uint8_t buttons);
 
 #endif /* ME_WINDOW_H */

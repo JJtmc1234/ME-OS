@@ -212,6 +212,85 @@ static void test_id_wrap(void)
           "wrap skips zero and the still-living ID 1");
 }
 
+static void test_focus_and_event_routing(void)
+{
+    printf("focus and input route only to the target window\n");
+    struct window_manager manager;
+    window_manager_init(&manager);
+    WindowId demo, system;
+    struct window_spec a = spec("Demo", 10, 20, 100, 80);
+    struct window_spec b = spec("System", 50, 40, 80, 60);
+    window_create(&manager, &a, &demo);
+    window_create(&manager, &b, &system);
+
+    check(window_focus(&manager, demo, false), "focus Demo without changing z-order");
+    check(window_focused(&manager) == demo && window_get(&manager, demo)->focused,
+          "exactly Demo is focused");
+    struct window_event event;
+    check(window_next_event(&manager, demo, &event) &&
+          event.type == WINDOW_EVENT_FOCUS_GAINED,
+          "Demo receives FOCUS_GAINED");
+
+    const struct window_event key = {
+        .type = WINDOW_EVENT_KEY_DOWN,
+        .data.key = { .ch = 'A', .code = WINDOW_KEY_NONE },
+    };
+    check(window_route_key(&manager, &key) == demo, "keyboard targets focus");
+    check(window_next_event(&manager, demo, &event) &&
+          event.type == WINDOW_EVENT_KEY_DOWN && event.data.key.ch == 'A',
+          "the focused queue receives the key");
+    check(window_event_count(&window_get(&manager, system)->events) == 0,
+          "the background queue did not receive the key");
+
+    check(window_route_pointer(&manager, WINDOW_EVENT_MOUSE_DOWN,
+                               75, 55, WINDOW_MOUSE_LEFT) == system,
+          "a click targets the topmost overlap");
+    check(window_focused(&manager) == system &&
+          window_at_z(&manager, window_count(&manager) - 1)->id == system,
+          "the clicked window is focused and raised");
+    check(window_next_event(&manager, demo, &event) &&
+          event.type == WINDOW_EVENT_FOCUS_LOST,
+          "old focus receives FOCUS_LOST first");
+    check(window_next_event(&manager, system, &event) &&
+          event.type == WINDOW_EVENT_FOCUS_GAINED,
+          "new focus receives FOCUS_GAINED");
+    check(window_next_event(&manager, system, &event) &&
+          event.type == WINDOW_EVENT_MOUSE_DOWN &&
+          event.data.mouse.x == 25 && event.data.mouse.y == 15,
+          "mouse coordinates are local and follow focus");
+
+    check(window_route_pointer(&manager, WINDOW_EVENT_MOUSE_MOVE,
+                               15, 25, WINDOW_MOUSE_LEFT) == system,
+          "a held pointer remains captured outside the window");
+    check(window_next_event(&manager, system, &event) &&
+          event.type == WINDOW_EVENT_MOUSE_MOVE &&
+          event.data.mouse.x == -35 && event.data.mouse.y == -15,
+          "captured movement retains local coordinates");
+    check(window_route_pointer(&manager, WINDOW_EVENT_MOUSE_UP,
+                               15, 25, 0) == system,
+          "release returns to the captured window");
+    check(manager.pointer_capture == WINDOW_ID_NONE,
+          "release ends pointer capture");
+    window_next_event(&manager, system, &event);
+
+    check(window_route_pointer(&manager, WINDOW_EVENT_MOUSE_DOWN,
+                               500, 500, WINDOW_MOUSE_LEFT) == WINDOW_ID_NONE,
+          "a background click targets no window");
+    check(window_focused(&manager) == WINDOW_ID_NONE,
+          "a background click clears focus");
+    check(window_route_key(&manager, &key) == WINDOW_ID_NONE,
+          "keyboard with no focus is not delivered");
+
+    window_focus(&manager, demo, false);
+    window_next_event(&manager, demo, &event); /* gained */
+    window_post_event(&manager, demo, &key);
+    check(window_destroy(&manager, demo), "destroy a window with queued input");
+    check(!window_next_event(&manager, demo, &event),
+          "destroyed queued input is no longer reachable");
+    check(!window_focus(&manager, demo, true), "destroyed focus is refused");
+    check(window_focused(NULL) == WINDOW_ID_NONE, "no manager has no focus");
+}
+
 int main(void)
 {
     test_create_and_retrieve();
@@ -219,6 +298,7 @@ int main(void)
     test_lifetime_and_geometry();
     test_z_order_and_hit_testing();
     test_id_wrap();
+    test_focus_and_event_routing();
 
     if (failures > 0) {
         printf("\n%d window object check(s) FAILED\n", failures);

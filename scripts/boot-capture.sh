@@ -20,6 +20,8 @@
 #   screen-wrap-left.ppm the steered rectangle after crossing its left edge
 #   screen-drag-ready.ppm pointer placed inside the rectangle before pressing
 #   screen-drag-held.ppm  pointer and rectangle moved while left is held
+#   screen-focus-system.ppm System after it is clicked and focused
+#   screen-focus-demo.ppm   Demo after it is clicked, focused, and raised
 #   screen-drag-release.ppm pointer moved again after releasing the rectangle
 #   debug.log         kernel log via QEMU's debug port
 #   serial.log        the same log via COM1, which real hardware also has
@@ -64,6 +66,8 @@ SHOT_WRAP_DOWN="${SHOT_WRAP_DOWN:-$BUILD_DIR/screen-wrap-down.ppm}"
 SHOT_WRAP_LEFT="${SHOT_WRAP_LEFT:-$BUILD_DIR/screen-wrap-left.ppm}"
 SHOT_DRAG_READY="${SHOT_DRAG_READY:-$BUILD_DIR/screen-drag-ready.ppm}"
 SHOT_DRAG_HELD="${SHOT_DRAG_HELD:-$BUILD_DIR/screen-drag-held.ppm}"
+SHOT_FOCUS_SYSTEM="${SHOT_FOCUS_SYSTEM:-$BUILD_DIR/screen-focus-system.ppm}"
+SHOT_FOCUS_DEMO="${SHOT_FOCUS_DEMO:-$BUILD_DIR/screen-focus-demo.ppm}"
 SHOT_DRAG_RELEASE="${SHOT_DRAG_RELEASE:-$BUILD_DIR/screen-drag-release.ppm}"
 # M9. Three presses down and eight left, so the checker can look for exactly
 # three and exactly eight steps rather than just "it moved".
@@ -119,6 +123,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 : > "$SHOT_WRAP_LEFT"
 : > "$SHOT_DRAG_READY"
 : > "$SHOT_DRAG_HELD"
+: > "$SHOT_FOCUS_SYSTEM"
+: > "$SHOT_FOCUS_DEMO"
 : > "$SHOT_DRAG_RELEASE"
 : > "$DEBUG_LOG"
 : > "$SERIAL_LOG"
@@ -224,28 +230,38 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
     sleep 2
     echo "screendump $SHOT_WRAP_LEFT"
     sleep 2
-    # M11. Pin the pointer at the top-left first, then put it at a known point
-    # inside the wrapped rectangle. Small packets avoid the PS/2 overflow bits.
+    # M15. Pin the pointer at the top-left, then click the overlapping System
+    # window. Small packets avoid the PS/2 overflow bits.
     for ((move = 0; move < 20; move++)); do
         echo "mouse_move -100 -100"
         sleep 0.05
     done
-    for ((move = 0; move < 5; move++)); do
-        echo "mouse_move 100 100"
-        sleep 0.05
-    done
-    for ((move = 0; move < 3; move++)); do
+    for ((move = 0; move < 10; move++)); do
         echo "mouse_move 100 0"
         sleep 0.05
     done
-    # x=850 remains comfortably inside the wrapped rectangle despite the few
-    # pixels of M5 timing variation before the first steering key freezes it.
-    echo "mouse_move 50 20"
+    echo "mouse_move 0 100"
+    echo "mouse_move 0 50"
+    echo "mouse_button 1"
+    sleep "$TYPE_DELAY"
+    echo "mouse_button 0"
+    sleep 2
+    echo "screendump $SHOT_FOCUS_SYSTEM"
+    sleep 2
+    # Move to x=850,y=520, a Demo-only point comfortably inside the wrapped
+    # rectangle despite the few pixels of M5 timing variation. The press both
+    # focuses/raises Demo for M15 and starts the existing M11 drag.
+    echo "mouse_move -75 100"
+    echo "mouse_move -75 100"
+    echo "mouse_move 0 100"
+    echo "mouse_move 0 70"
     sleep 2
     echo "screendump $SHOT_DRAG_READY"
     sleep 2
     echo "mouse_button 1"
     sleep "$TYPE_DELAY"
+    echo "screendump $SHOT_FOCUS_DEMO"
+    sleep 2
     echo "mouse_move -90 15"
     sleep "$TYPE_DELAY"
     echo "mouse_move -90 15"
@@ -285,6 +301,8 @@ command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 [ -s "$SHOT_WRAP_LEFT" ] || fail "QEMU produced no screenshot at $SHOT_WRAP_LEFT"
 [ -s "$SHOT_DRAG_READY" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_READY"
 [ -s "$SHOT_DRAG_HELD" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_HELD"
+[ -s "$SHOT_FOCUS_SYSTEM" ] || fail "QEMU produced no screenshot at $SHOT_FOCUS_SYSTEM"
+[ -s "$SHOT_FOCUS_DEMO" ] || fail "QEMU produced no screenshot at $SHOT_FOCUS_DEMO"
 [ -s "$SHOT_DRAG_RELEASE" ] || fail "QEMU produced no screenshot at $SHOT_DRAG_RELEASE"
 
 echo "boot-capture: screens $SHOT_BOOT, $SHOT_KEY, $SHOT_MOUSE, $SHOT_CLAMP, $SHOT_SUM"

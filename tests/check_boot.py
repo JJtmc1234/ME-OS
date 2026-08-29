@@ -27,6 +27,8 @@ milestones:
       each time
   M14 two overlapping opaque window surfaces, with all existing Demo drawing
       in local coordinates and a compositor-owned desktop background
+  M15 clicks target the topmost window, move keyboard focus, and raise the
+      focused window without leaking input to the background window
 
 This is not a substitute for a person seeing it once on real hardware. It is
 what keeps the milestones from silently breaking afterwards.
@@ -61,6 +63,8 @@ SCREEN_WRAP_DOWN = BUILD_DIR / "screen-wrap-down.ppm"
 SCREEN_WRAP_LEFT = BUILD_DIR / "screen-wrap-left.ppm"
 SCREEN_DRAG_READY = BUILD_DIR / "screen-drag-ready.ppm"
 SCREEN_DRAG_HELD = BUILD_DIR / "screen-drag-held.ppm"
+SCREEN_FOCUS_SYSTEM = BUILD_DIR / "screen-focus-system.ppm"
+SCREEN_FOCUS_DEMO = BUILD_DIR / "screen-focus-demo.ppm"
 SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
 SERIAL_LOG = BUILD_DIR / "serial.log"
@@ -263,6 +267,41 @@ def check_window_layout(path: Path) -> str:
         f"M14 compositor: desktop background, Demo {DEMO_WIDTH}x{DEMO_HEIGHT} "
         f"at ({DEMO_X}, {DEMO_Y}), and System {SYSTEM_WIDTH}x{SYSTEM_HEIGHT} "
         f"opaque above it at ({SYSTEM_X}, {SYSTEM_Y})"
+    )
+
+
+def check_focus_routing(system_path: Path, demo_path: Path) -> str:
+    """M15: clicks focus the hit window and raise it deterministically."""
+    system_width, system_height, system_pixels = read_ppm(system_path)
+    demo_width, demo_height, demo_pixels = read_ppm(demo_path)
+    if (system_width, system_height) != (demo_width, demo_height):
+        raise CheckFailed("M15 focus captures have different framebuffer sizes")
+
+    def colour_at(pixels: bytes, x: int, y: int) -> tuple[int, int, int]:
+        index = (y * system_width + x) * 3
+        return pixels[index], pixels[index + 1], pixels[index + 2]
+
+    samples = (
+        (SYSTEM_X, SYSTEM_Y, ACCENT_COLOUR, "System accent"),
+        (SYSTEM_X + 10, SYSTEM_Y + 40, SYSTEM_COLOUR, "System body"),
+    )
+    for x, y, system_expected, label in samples:
+        system_actual = colour_at(system_pixels, x, y)
+        if system_actual != system_expected:
+            raise CheckFailed(
+                f"{system_path.name}: {label} at ({x}, {y}) is "
+                f"rgb{system_actual}, expected rgb{system_expected}"
+            )
+        demo_actual = colour_at(demo_pixels, x, y)
+        if demo_actual != (0, 0, 0):
+            raise CheckFailed(
+                f"{demo_path.name}: Demo did not cover {label} after being raised; "
+                f"pixel ({x}, {y}) is rgb{demo_actual}"
+            )
+
+    return (
+        "M15 focus routing: clicking System kept it visible on top; clicking "
+        "Demo focused and raised Demo over both sampled System regions"
     )
 
 
@@ -525,6 +564,8 @@ def check_log() -> list[str]:
         "rectangle drag started",
         "rectangle dragged to",
         "rectangle drag ended",
+        "focus moved to window 2",
+        "focus moved to window 1",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -862,6 +903,8 @@ def main() -> int:
         drag_release_notes, drag_release_cursor, _, _, _ = check_screen(
             SCREEN_DRAG_RELEASE, M2_AFTER_ARROW_LEFT, M8_VARIF)
         notes += drag_ready_notes + drag_held_notes + drag_release_notes
+        notes.append("  " + check_focus_routing(
+            SCREEN_FOCUS_SYSTEM, SCREEN_FOCUS_DEMO))
         notes += check_dragging(
             drag_ready_cursor, drag_held_cursor, drag_release_cursor, size)
         notes += check_rotation()
@@ -872,11 +915,11 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M14 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M15 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
-          "two opaque window surfaces composited over a desktop")
+          "two opaque window surfaces with click focus and routed input")
     print("A person should still watch it boot once with make run.")
     return 0
 

@@ -17,10 +17,12 @@
  * M11: pick the rectangle up with the left mouse button and drag it.
  * M13: create stable window objects in deterministic z-order.
  * M14: draw into per-window surfaces and composite them over a desktop.
+ * M15: route keyboard, mouse and focus through bounded per-window queues.
  *
  * Demo owns every earlier graphic in local coordinates. The compositor alone
- * presents window surfaces and the cursor to the framebuffer. There is no
- * console, scrolling or input event buffer yet.
+ * presents window surfaces and the cursor to the framebuffer. Device state is
+ * translated to window events before Demo sees it. There is no console or
+ * scrolling yet.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -357,6 +359,132 @@ static void show_key(const struct kbd_key *key)
     log_str("\n");
 }
 
+static enum window_key_code window_key_code_for(const struct kbd_key *key)
+{
+    if (key->ch != '\0' || key->name == NULL) return WINDOW_KEY_NONE;
+    if (same_name(key->name, "ENTER")) return WINDOW_KEY_ENTER;
+    if (same_name(key->name, "ESCAPE")) return WINDOW_KEY_ESCAPE;
+    if (same_name(key->name, "BACKSPACE")) return WINDOW_KEY_BACKSPACE;
+    if (same_name(key->name, "TAB")) return WINDOW_KEY_TAB;
+    if (same_name(key->name, "UP")) return WINDOW_KEY_UP;
+    if (same_name(key->name, "DOWN")) return WINDOW_KEY_DOWN;
+    if (same_name(key->name, "LEFT")) return WINDOW_KEY_LEFT;
+    if (same_name(key->name, "RIGHT")) return WINDOW_KEY_RIGHT;
+    return WINDOW_KEY_NONE;
+}
+
+static const char *window_key_name(enum window_key_code code)
+{
+    switch (code) {
+    case WINDOW_KEY_ENTER: return "ENTER";
+    case WINDOW_KEY_ESCAPE: return "ESCAPE";
+    case WINDOW_KEY_BACKSPACE: return "BACKSPACE";
+    case WINDOW_KEY_TAB: return "TAB";
+    case WINDOW_KEY_UP: return "UP";
+    case WINDOW_KEY_DOWN: return "DOWN";
+    case WINDOW_KEY_LEFT: return "LEFT";
+    case WINDOW_KEY_RIGHT: return "RIGHT";
+    default: return NULL;
+    }
+}
+
+static void handle_demo_key(const struct window_event *event)
+{
+    const struct kbd_key key = {
+        .ch = event->data.key.ch,
+        .name = window_key_name(event->data.key.code),
+    };
+    show_key(&key);
+
+    int64_t dx = 0, dy = 0;
+    if (event->data.key.code == WINDOW_KEY_LEFT) {
+        dx = -M9_STEP;
+    } else if (event->data.key.code == WINDOW_KEY_RIGHT) {
+        dx = M9_STEP;
+    } else if (event->data.key.code == WINDOW_KEY_UP) {
+        dy = -M9_STEP;
+    } else if (event->data.key.code == WINDOW_KEY_DOWN) {
+        dy = M9_STEP;
+    }
+    if (dx != 0 || dy != 0) {
+        if (rect_state.speed != 0) {
+            rect_state.speed = 0;
+            log_stage("the rectangle is being steered, so it stopped drifting");
+        }
+        if (rect_nudge(&rect_state, dx, dy, demo_surface.width,
+                       rect_min_y, rect_max_y)) {
+            draw_rect();
+            log_str("me-os: rectangle moved to ");
+            log_dec((uint64_t)rect_state.x);
+            log_str(",");
+            log_dec((uint64_t)rect_state.y);
+            log_str("\n");
+        }
+    }
+
+    const char typed = calc_char_for(&key);
+    if (typed != '\0' && calc_key(&calc_state, typed)) {
+        draw_sum_line();
+        if (calc_state.has_result) {
+            log_str("me-os: sum ");
+            log_str(calc_state.text);
+            log_str(" = ");
+            if (calc_state.result < 0) {
+                log_str("-");
+                log_dec((uint64_t)(-(calc_state.result + 1)) + 1u);
+            } else {
+                log_dec((uint64_t)calc_state.result);
+            }
+            log_str("\n");
+        } else if (calc_state.error) {
+            log_stage("sum could not be evaluated");
+        }
+    }
+}
+
+static void handle_demo_event(const struct window_event *event)
+{
+    if (event->type == WINDOW_EVENT_KEY_DOWN) {
+        handle_demo_key(event);
+        return;
+    }
+    if (event->type == WINDOW_EVENT_MOUSE_DOWN) {
+        if (rect_drag_begin(&rect_drag_state, &rect_state,
+                            event->data.mouse.x, event->data.mouse.y)) {
+            rect_state.speed = 0;
+            log_stage("rectangle drag started");
+        }
+        return;
+    }
+    if (event->type == WINDOW_EVENT_MOUSE_UP) {
+        if (rect_drag_end(&rect_drag_state)) {
+            log_stage("rectangle drag ended");
+        }
+        return;
+    }
+    if (event->type == WINDOW_EVENT_MOUSE_MOVE &&
+        (event->data.mouse.buttons & WINDOW_MOUSE_LEFT) != 0 &&
+        rect_drag_state.active &&
+        rect_drag_move(&rect_drag_state, &rect_state,
+                       event->data.mouse.x, event->data.mouse.y,
+                       demo_surface.width, rect_min_y, rect_max_y)) {
+        draw_rect();
+        log_str("me-os: rectangle dragged to ");
+        log_dec((uint64_t)rect_state.x);
+        log_str(",");
+        log_dec((uint64_t)rect_state.y);
+        log_str("\n");
+    }
+}
+
+static void drain_demo_events(void)
+{
+    struct window_event event;
+    while (window_next_event(&window_manager, demo_window_id, &event)) {
+        handle_demo_event(&event);
+    }
+}
+
 void kmain(void)
 {
     __asm__ volatile ("cli");  /* no interrupt table exists yet */
@@ -426,6 +554,9 @@ void kmain(void)
         !window_attach_surface(&window_manager, demo_window_id, &demo_surface) ||
         !window_attach_surface(&window_manager, system_window_id, &system_surface)) {
         fail("could not create the M14 software surfaces");
+    }
+    if (!window_focus(&window_manager, demo_window_id, false)) {
+        fail("could not focus Demo for M15 input routing");
     }
 
     surface_clear(&demo_surface, colour_background);
@@ -590,57 +721,15 @@ void kmain(void)
         struct mouse_delta movement;
 
         if (kbd_poll(&key)) {
-            show_key(&key);
-
-            /* M9: the arrows move the rectangle. The first press also stops it
-             * drifting: once someone is steering it, having it wander off on
-             * its own as well would be a nuisance rather than a feature. */
-            int64_t dx = 0, dy = 0;
-            if (key.ch == '\0' && key.name != NULL) {
-                if (same_name(key.name, "LEFT")) {
-                    dx = -M9_STEP;
-                } else if (same_name(key.name, "RIGHT")) {
-                    dx = M9_STEP;
-                } else if (same_name(key.name, "UP")) {
-                    dy = -M9_STEP;
-                } else if (same_name(key.name, "DOWN")) {
-                    dy = M9_STEP;
-                }
-            }
-            if (dx != 0 || dy != 0) {
-                if (rect_state.speed != 0) {
-                    rect_state.speed = 0;
-                    log_stage("the rectangle is being steered, so it stopped drifting");
-                }
-                if (rect_nudge(&rect_state, dx, dy, demo_surface.width,
-                               rect_min_y, rect_max_y)) {
-                    draw_rect();
-                    log_str("me-os: rectangle moved to ");
-                    log_dec((uint64_t)rect_state.x);
-                    log_str(",");
-                    log_dec((uint64_t)rect_state.y);
-                    log_str("\n");
-                }
-            }
-
-            const char typed = calc_char_for(&key);
-            if (typed != '\0' && calc_key(&calc_state, typed)) {
-                draw_sum_line();
-                if (calc_state.has_result) {
-                    log_str("me-os: sum ");
-                    log_str(calc_state.text);
-                    log_str(" = ");
-                    if (calc_state.result < 0) {
-                        log_str("-");
-                        log_dec((uint64_t)(-(calc_state.result + 1)) + 1u);
-                    } else {
-                        log_dec((uint64_t)calc_state.result);
-                    }
-                    log_str("\n");
-                } else if (calc_state.error) {
-                    log_stage("sum could not be evaluated");
-                }
-            }
+            const struct window_event event = {
+                .type = WINDOW_EVENT_KEY_DOWN,
+                .data.key = {
+                    .ch = key.ch,
+                    .code = window_key_code_for(&key),
+                },
+            };
+            window_route_key(&window_manager, &event);
+            drain_demo_events();
         }
 
         /* One reading of the clock, shared by everything that moves, so the
@@ -661,38 +750,35 @@ void kmain(void)
                              fb_width(), fb_height());
             const bool pressed = movement.left && !mouse_left_down;
             const bool released = !movement.left && mouse_left_down;
-            bool rectangle_changed = false;
-            const struct window *demo =
-                window_get_const(&window_manager, demo_window_id);
-            const int64_t local_pointer_x =
-                pointer_state.x - (demo == NULL ? 0 : demo->geometry.x);
-            const int64_t local_pointer_y =
-                pointer_state.y - (demo == NULL ? 0 : demo->geometry.y);
+            uint8_t buttons = 0;
+            if (movement.left) buttons |= WINDOW_MOUSE_LEFT;
+            if (movement.right) buttons |= WINDOW_MOUSE_RIGHT;
+            if (movement.middle) buttons |= WINDOW_MOUSE_MIDDLE;
 
-            if (pressed && rect_drag_begin(&rect_drag_state, &rect_state,
-                                           local_pointer_x, local_pointer_y)) {
-                rect_state.speed = 0;
-                log_stage("rectangle drag started");
+            bool focus_changed = false;
+            if (pressed) {
+                const WindowId before = window_focused(&window_manager);
+                const WindowId target = window_route_pointer(
+                    &window_manager, WINDOW_EVENT_MOUSE_DOWN,
+                    pointer_state.x, pointer_state.y, buttons);
+                focus_changed = before != window_focused(&window_manager);
+                if (focus_changed) {
+                    log_str("me-os: focus moved to window ");
+                    log_dec(target);
+                    log_str("\n");
+                }
             }
-            if (movement.left && rect_drag_state.active) {
-                rectangle_changed = rect_drag_move(
-                    &rect_drag_state, &rect_state,
-                    local_pointer_x, local_pointer_y,
-                    demo_surface.width, rect_min_y, rect_max_y);
+            if (pointer_changed) {
+                window_route_pointer(&window_manager, WINDOW_EVENT_MOUSE_MOVE,
+                                     pointer_state.x, pointer_state.y, buttons);
             }
-            if (released && rect_drag_end(&rect_drag_state)) {
-                log_stage("rectangle drag ended");
+            if (released) {
+                window_route_pointer(&window_manager, WINDOW_EVENT_MOUSE_UP,
+                                     pointer_state.x, pointer_state.y, buttons);
             }
             mouse_left_down = movement.left;
-
-            if (rectangle_changed) {
-                draw_rect();
-                log_str("me-os: rectangle dragged to ");
-                log_dec((uint64_t)rect_state.x);
-                log_str(",");
-                log_dec((uint64_t)rect_state.y);
-                log_str("\n");
-            } else if (pointer_changed) {
+            drain_demo_events();
+            if (pointer_changed || focus_changed) {
                 present_desktop();
             }
         }

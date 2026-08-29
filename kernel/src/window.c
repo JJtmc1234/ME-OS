@@ -108,6 +108,7 @@ bool window_create(struct window_manager *manager,
     window->id = id;
     window->geometry = spec->geometry;
     window->occupied = true;
+    window_event_queue_init(&window->events);
     for (size_t i = 0; i < WINDOW_TITLE_CAPACITY; i++) {
         window->title[i] = spec->title[i];
         if (spec->title[i] == '\0') {
@@ -153,6 +154,9 @@ bool window_destroy(struct window_manager *manager, WindowId id)
     }
     manager->count--;
     manager->z_slots[manager->count] = 0;
+    if (manager->pointer_capture == id) {
+        manager->pointer_capture = WINDOW_ID_NONE;
+    }
     manager->slots[(size_t)slot] = (struct window){0};
     return true;
 }
@@ -245,4 +249,124 @@ WindowId window_hit_test(const struct window_manager *manager,
         }
     }
     return WINDOW_ID_NONE;
+}
+
+WindowId window_focused(const struct window_manager *manager)
+{
+    if (manager == NULL) {
+        return WINDOW_ID_NONE;
+    }
+    for (size_t i = 0; i < WINDOW_MAX; i++) {
+        if (manager->slots[i].occupied && manager->slots[i].focused) {
+            return manager->slots[i].id;
+        }
+    }
+    return WINDOW_ID_NONE;
+}
+
+bool window_post_event(struct window_manager *manager, WindowId id,
+                       const struct window_event *event)
+{
+    struct window *window = window_get(manager, id);
+    return window != NULL && window_event_push(&window->events, event);
+}
+
+bool window_next_event(struct window_manager *manager, WindowId id,
+                       struct window_event *event)
+{
+    struct window *window = window_get(manager, id);
+    return window != NULL && window_event_pop(&window->events, event);
+}
+
+bool window_focus(struct window_manager *manager, WindowId id, bool raise)
+{
+    if (manager == NULL) {
+        return false;
+    }
+    struct window *target = id == WINDOW_ID_NONE ? NULL : window_get(manager, id);
+    if (id != WINDOW_ID_NONE && (target == NULL || target->minimized)) {
+        return false;
+    }
+
+    const WindowId old_id = window_focused(manager);
+    if (old_id == id) {
+        return !raise || id == WINDOW_ID_NONE || window_raise(manager, id);
+    }
+
+    struct window_event event = { .type = WINDOW_EVENT_FOCUS_LOST };
+    struct window *old = window_get(manager, old_id);
+    if (old != NULL) {
+        old->focused = false;
+        window_event_push(&old->events, &event);
+    }
+    if (target != NULL) {
+        target->focused = true;
+        event.type = WINDOW_EVENT_FOCUS_GAINED;
+        window_event_push(&target->events, &event);
+        if (raise && !window_raise(manager, id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+WindowId window_route_key(struct window_manager *manager,
+                          const struct window_event *event)
+{
+    if (manager == NULL || event == NULL ||
+        event->type != WINDOW_EVENT_KEY_DOWN) {
+        return WINDOW_ID_NONE;
+    }
+    const WindowId target = window_focused(manager);
+    return window_post_event(manager, target, event) ? target : WINDOW_ID_NONE;
+}
+
+static int32_t local_coordinate(int64_t coordinate, int32_t origin)
+{
+    const int64_t local = coordinate - (int64_t)origin;
+    if (local < INT32_MIN) return INT32_MIN;
+    if (local > INT32_MAX) return INT32_MAX;
+    return (int32_t)local;
+}
+
+WindowId window_route_pointer(struct window_manager *manager,
+                              enum window_event_type type,
+                              int64_t x, int64_t y, uint8_t buttons)
+{
+    if (manager == NULL ||
+        (type != WINDOW_EVENT_MOUSE_MOVE &&
+         type != WINDOW_EVENT_MOUSE_DOWN &&
+         type != WINDOW_EVENT_MOUSE_UP)) {
+        return WINDOW_ID_NONE;
+    }
+
+    WindowId target = manager->pointer_capture;
+    if (window_get(manager, target) == NULL) {
+        manager->pointer_capture = WINDOW_ID_NONE;
+        target = WINDOW_ID_NONE;
+    }
+    if (type == WINDOW_EVENT_MOUSE_DOWN) {
+        target = window_hit_test(manager, x, y);
+        window_focus(manager, target, true);
+        manager->pointer_capture = target;
+    } else if (target == WINDOW_ID_NONE) {
+        target = window_hit_test(manager, x, y);
+    }
+
+    struct window *window = window_get(manager, target);
+    if (window != NULL) {
+        const struct window_event event = {
+            .type = type,
+            .data.mouse = {
+                .x = local_coordinate(x, window->geometry.x),
+                .y = local_coordinate(y, window->geometry.y),
+                .buttons = buttons,
+            },
+        };
+        window_event_push(&window->events, &event);
+    }
+    if (type == WINDOW_EVENT_MOUSE_UP) {
+        manager->pointer_capture = WINDOW_ID_NONE;
+    }
+    return target;
 }
