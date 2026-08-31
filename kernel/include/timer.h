@@ -25,7 +25,10 @@ void timer_init(void);
 uint64_t timer_elapsed_between(uint16_t previous, uint16_t current, uint32_t period);
 
 /* Reads the counter and returns how many counts have passed since the last
- * call. The first call after timer_init returns 0. */
+ * call, or since timer_init for the first call. That first reading is not
+ * zero: timer_init latches the counter, so the first poll covers whatever ran
+ * in between. A caller that wants to start from a known point discards one
+ * poll, which is what main.c does. */
 uint64_t timer_poll(void);
 
 #endif /* ME_TIMER_H */

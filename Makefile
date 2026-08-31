@@ -74,7 +74,8 @@ CFLAGS := -std=gnu11 -ffreestanding -nostdinc -O2 -g \
           -mno-red-zone -mcmodel=kernel \
           -ffile-prefix-map=$(CURDIR)=. \
           -isystem $(FREESTANDING_INC) \
-          -Ikernel/include
+          -Ikernel/include \
+          -MMD -MP
 
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 --gc-sections \
            --build-id=none -T linker.ld
@@ -82,6 +83,23 @@ LDFLAGS := -nostdlib -static -z max-page-size=0x1000 --gc-sections \
 # sort, so link order does not depend on how the filesystem lists the directory.
 SRCS := $(sort $(wildcard kernel/src/*.c))
 OBJS := $(patsubst kernel/src/%.c,$(BUILD)/obj/%.o,$(SRCS))
+
+# Editing a header has to rebuild what includes it. Without this the build
+# succeeded, linked objects compiled against the old header, and reran test
+# binaries that were never recompiled, all reporting a clean pass. Two objects
+# disagreeing about a struct layout link without complaint, and the wrong
+# behaviour then shows up at runtime in a file nobody edited.
+#
+# Kernel objects use the compiler's own dependency files. -MMD writes one .d
+# beside each .o listing the headers that object really included, and -MP adds
+# an empty rule for each header so deleting one does not wedge the build. The
+# minus on -include is there for the first build, when no .d exists yet.
+DEPS := $(OBJS:.o=.d)
+
+# Host tests compile several sources in one command, so per object .d files do
+# not fit. They depend on every header instead. That rebuilds more than strictly
+# needed, which for ten small binaries costs a second and is always right.
+HEADERS := $(sort $(wildcard kernel/include/*.h))
 
 .PHONY: all check check-tools run run-serial test test-unit clean distclean help
 
@@ -212,55 +230,58 @@ run-serial: $(ISO) $(OVMF_LOCAL)
 HOST_TEST_FLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include
 
 $(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c \
-                         kernel/src/surface.c
+                         kernel/src/surface.c \
+                         $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c kernel/src/surface.c -o $@
 
 # mouse.c compiles on the host because only its pure decoding is called here.
 # Nothing in this test touches a port.
-$(BUILD)/pointer_test: tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c
+$(BUILD)/pointer_test: tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c -o $@
 
-$(BUILD)/timer_rect_test: tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c
+$(BUILD)/timer_rect_test: tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/timer_rect_test.c kernel/src/timer.c kernel/src/rect.c -o $@
 
-$(BUILD)/calc_test: tests/calc_test.c kernel/src/calc.c kernel/src/vars.c
+$(BUILD)/calc_test: tests/calc_test.c kernel/src/calc.c kernel/src/vars.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) \
 		tests/calc_test.c kernel/src/calc.c kernel/src/vars.c -o $@
 
-$(BUILD)/vars_test: tests/vars_test.c kernel/src/vars.c
+$(BUILD)/vars_test: tests/vars_test.c kernel/src/vars.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/vars_test.c kernel/src/vars.c -o $@
 
-$(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c
+$(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c -o $@
 
-$(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c
+$(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/geometry_test.c kernel/src/geometry.c -o $@ -lm
 
 $(BUILD)/window_test: tests/window_test.c kernel/src/window.c kernel/src/event.c \
-                      kernel/src/surface.c kernel/src/font.c
+                      kernel/src/surface.c kernel/src/font.c \
+                         $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/window_test.c kernel/src/window.c \
 		kernel/src/event.c kernel/src/surface.c kernel/src/font.c -o $@
 
 $(BUILD)/surface_test: tests/surface_test.c kernel/src/surface.c kernel/src/font.c \
                        kernel/src/window.c kernel/src/compositor.c kernel/src/cursor.c \
-                       kernel/src/event.c
+                       kernel/src/event.c \
+                         $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/surface_test.c kernel/src/surface.c \
 		kernel/src/font.c kernel/src/window.c kernel/src/compositor.c \
 		kernel/src/cursor.c kernel/src/event.c -o $@
 
-$(BUILD)/event_test: tests/event_test.c kernel/src/event.c
+$(BUILD)/event_test: tests/event_test.c kernel/src/event.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/event_test.c kernel/src/event.c -o $@
 
@@ -292,3 +313,5 @@ clean:
 
 distclean: clean
 	$(RM) -r $(LIMINE_DIR)
+
+-include $(DEPS)

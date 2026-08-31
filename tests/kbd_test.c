@@ -94,6 +94,12 @@ static void test_arithmetic_keys(void)
     check(gives(0x07, true, '^'), "shift and 6 gives a power");
     check(gives(0x09, true, '*'), "shift and 8 gives a multiply");
     check(gives(0x0D, true, '+'), "shift and equals gives a plus");
+    /* The comparison keys. Without these, a wrong 0x33 would leave IF a < b
+     * with no working less than and nothing in either suite would say so. */
+    check(gives(0x33, true, '<'), "shift and comma gives a less than");
+    check(gives(0x34, true, '>'), "shift and full stop gives a greater than");
+    check(refuses(0x33, false), "comma unshifted is not a key this layout knows");
+    check(refuses(0x34, false), "nor is full stop unshifted");
 
     printf("and the same keys unshifted are still their own characters\n");
     check(gives(0x07, false, '6'), "6 without shift");
@@ -138,7 +144,12 @@ static void test_arrow_keys(void)
     check(!kbd_translate_extended(0x48, NULL), "nowhere to put the answer");
 
     printf("the same codes without the prefix are their ordinary keys\n");
-    check(gives(0x4B, false, '\0') == 0, "0x4B unprefixed is not a left arrow");
+    /* refuses, not gives with a nul. gives returns 0 for every behaviour
+     * kbd_translate could have, so the old form passed whatever happened and
+     * would have gone on passing if 0x4B were wired up as a printable key. */
+    check(refuses(0x4B, false), "0x4B unprefixed is not a key this layout knows");
+    check(refuses(0x48, false), "nor is 0x48");
+    check(refuses(0x50, false), "nor is 0x50");
 }
 
 static void test_refusals(void)

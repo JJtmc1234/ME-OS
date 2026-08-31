@@ -80,7 +80,14 @@ static int count_pixels(unsigned int colour)
     return total;
 }
 
-static struct limine_framebuffer make_fb(void)
+/* Channel masks are a parameter, not a constant. fb_rgb exists so the kernel
+ * does not assume 0xRRGGBB, and hard coding 0xRRGGBB here was proving the one
+ * case the function did not need writing for. QEMU always hands over
+ * 0xRRGGBB, so a regression would have passed every test and every boot
+ * capture on this machine and only shown up on real hardware. */
+static struct limine_framebuffer make_fb_masks(uint8_t rs, uint8_t rsh,
+                                               uint8_t gs, uint8_t gsh,
+                                               uint8_t bs, uint8_t bsh)
 {
     struct limine_framebuffer fb;
     memset(&fb, 0, sizeof fb);
@@ -89,10 +96,15 @@ static struct limine_framebuffer make_fb(void)
     fb.height = HEIGHT;
     fb.pitch = PITCH;
     fb.bpp = 32;
-    fb.red_mask_size = 8;   fb.red_mask_shift = 16;
-    fb.green_mask_size = 8; fb.green_mask_shift = 8;
-    fb.blue_mask_size = 8;  fb.blue_mask_shift = 0;
+    fb.red_mask_size = rs;   fb.red_mask_shift = rsh;
+    fb.green_mask_size = gs; fb.green_mask_shift = gsh;
+    fb.blue_mask_size = bs;  fb.blue_mask_shift = bsh;
     return fb;
+}
+
+static struct limine_framebuffer make_fb(void)
+{
+    return make_fb_masks(8, 16, 8, 8, 8, 0);
 }
 
 static void reset(void)
@@ -233,6 +245,18 @@ static void test_line_clipping(void)
     check(guards_intact() && padding_intact(), "guards and padding untouched");
 }
 
+/* Re inits fb against one layout so the packing checks below can move the
+ * masks. reset() puts the ordinary layout back afterwards. */
+static void init_with(uint8_t rs, uint8_t rsh, uint8_t gs, uint8_t gsh,
+                      uint8_t bs, uint8_t bsh)
+{
+    struct limine_framebuffer fb = make_fb_masks(rs, rsh, gs, gsh, bs, bsh);
+    if (!fb_init(&fb)) {
+        printf("  FAIL  fb_init rejected a framebuffer it should accept\n");
+        exit(1);
+    }
+}
+
 static void test_colour_packing(void)
 {
     printf("fb_rgb packs to the framebuffer's own channel masks\n");
@@ -241,6 +265,60 @@ static void test_colour_packing(void)
     check(fb_rgb(0, 255, 0) == 0x0000FF00u, "green goes to the green mask");
     check(fb_rgb(0, 0, 255) == 0x000000FFu, "blue goes to the blue mask");
     check(fb_rgb(0, 0, 0) == 0u, "black is zero");
+
+    printf("and to a layout that is not 0xRRGGBB\n");
+    /* BGR, the channels swapped end for end. */
+    init_with(8, 0, 8, 8, 8, 16);
+    check(fb_rgb(255, 0, 0) == 0x000000FFu, "red follows its mask down to bit 0");
+    check(fb_rgb(0, 0, 255) == 0x00FF0000u, "blue follows its mask up to bit 16");
+    check(fb_rgb(0, 255, 0) == 0x0000FF00u, "green stays where it was");
+    check(fb_rgb(255, 255, 255) == 0x00FFFFFFu, "white still fills all three");
+
+    /* Channels in the top word, which is a layout no byte order describes. */
+    init_with(8, 24, 8, 16, 8, 8);
+    check(fb_rgb(255, 0, 0) == 0xFF000000u, "a shift past 23 is not truncated");
+    check(fb_rgb(0, 0, 255) == 0x0000FF00u, "and the others move with it");
+
+    printf("and to channels narrower than eight bits\n");
+    /* 5-6-5, the common 16 bit layout. This is the only thing that exercises
+     * the narrowing shift in pack, which every 8 bit mask leaves as a no op. */
+    init_with(5, 11, 6, 5, 5, 0);
+    check(fb_rgb(255, 255, 255) == 0xFFFFu, "white fills all sixteen bits");
+    check(fb_rgb(255, 0, 0) == 0xF800u, "red keeps its top five bits");
+    check(fb_rgb(0, 255, 0) == 0x07E0u, "green keeps its top six");
+    check(fb_rgb(0, 0, 255) == 0x001Fu, "blue keeps its top five");
+    check(fb_rgb(7, 3, 7) == 0u, "and the low bits that do not fit are dropped");
+    check(fb_rgb(0, 0, 0) == 0u, "black is still zero");
+
+    reset();
+}
+
+/* fb_pixel had no test at all, so the guard that makes an out of bounds read
+ * safe was held up by nothing. A negative coordinate arrives here as a very
+ * large unsigned value, which is the case that has to come back as 0 rather
+ * than as a read off the end of the mapping. The guard bytes prove the read
+ * did not stray, since a stray read of the sentinel would not return 0. */
+static void test_pixel_read_guard(void)
+{
+    printf("fb_pixel reads inside the screen and refuses outside it\n");
+    reset();
+    const uint32_t colour = 0x00ABCDEFu;
+    fb_put_pixel(0, 0, colour);
+    fb_put_pixel(WIDTH - 1, HEIGHT - 1, colour);
+    check(fb_pixel(0, 0) == colour, "the first pixel reads back");
+    check(fb_pixel(WIDTH - 1, HEIGHT - 1) == colour, "and so does the last");
+
+    check(fb_pixel(WIDTH, 0) == 0, "one column past the right edge is 0");
+    check(fb_pixel(0, HEIGHT) == 0, "one row past the bottom edge is 0");
+    check(fb_pixel(WIDTH, HEIGHT) == 0, "past both edges is 0");
+
+    /* What a signed -1 becomes on the way in, which is how the cursor's
+     * save loop reaches for the row above the top of the screen. */
+    check(fb_pixel((uint64_t)-1, 0) == 0, "a wrapped negative column is 0");
+    check(fb_pixel(0, (uint64_t)-1) == 0, "a wrapped negative row is 0");
+    check(fb_pixel(UINT64_MAX, UINT64_MAX) == 0, "and the largest pair is 0");
+
+    check(guards_intact() && padding_intact(), "no read strayed out of bounds");
 }
 
 static void test_surface_present(void)
@@ -287,6 +365,7 @@ int main(void)
     test_text_clipping();
     test_line_clipping();
     test_colour_packing();
+    test_pixel_read_guard();
     test_surface_present();
 
     free(block);

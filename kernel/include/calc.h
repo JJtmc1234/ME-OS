@@ -74,8 +74,12 @@ void calc_init(struct calc *calc, struct vars *vars);
  * the line is the point of it. */
 void calc_reset(struct calc *calc);
 
-/* Feeds one character: a digit, '+', '-', or one of the control characters
- * above. Returns true when the line to display has changed. */
+/* Feeds one character: a digit, a letter, a space, one of the operators
+ * + - * / ^, one of the comparisons = < >, or one of the control characters
+ * above. Anything else is refused. Letters and spaces are accepted because
+ * variables need names; whether the line means anything is the parser's
+ * question, not this one's. Returns true when the line to display has
+ * changed. */
 bool calc_key(struct calc *calc, char key);
 
 /* Evaluates a complete expression, reading and assigning names in `vars`,

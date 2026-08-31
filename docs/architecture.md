@@ -197,6 +197,7 @@ still does not replace a person watching it boot once.
 
 ## What is deliberately absent
 
-No memory manager, no processes, no filesystem, no drivers beyond the keyboard,
-no networking, no shell, no agent integration. Each of those arrives when a
+No memory manager, no processes, no filesystem, no networking, no shell, no
+agent integration. The only drivers are the polled ones the milestones needed:
+the keyboard, the PS/2 mouse and the interval timer. Each of those arrives when a
 milestone requires it, not before.
