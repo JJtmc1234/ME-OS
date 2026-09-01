@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "limine.h"
+#include "region.h"
 #include "surface.h"
 
 /* Returns false if the framebuffer uses a layout this code cannot drive,
@@ -42,5 +43,16 @@ void fb_draw_string(const char *s, uint64_t x, uint64_t y,
 /* Presents a software-composited surface at the framebuffer origin. Both the
  * source dimensions and framebuffer writes are clipped. */
 void fb_present(const struct surface *surface);
+
+/* Copies one rectangle of the surface out to the display.
+ *
+ * The framebuffer is memory on the far side of the graphics adapter, so every
+ * pixel written here costs far more than one written into an ordinary surface.
+ * Presenting the whole screen for a cursor that moved eight pixels was the
+ * largest single cost in the old input path. See M16 in docs/milestones.md.
+ *
+ * Returns how many pixels it actually wrote, so a counter can measure the
+ * difference rather than a comment claiming it. */
+uint64_t fb_present_region(const struct surface *surface, struct region region);
 
 #endif /* ME_FB_H */

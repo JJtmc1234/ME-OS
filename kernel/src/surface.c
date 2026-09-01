@@ -214,21 +214,55 @@ void surface_draw_string(struct surface *surface, const char *text,
 void surface_blit(struct surface *destination, const struct surface *source,
                   int64_t destination_x, int64_t destination_y)
 {
+    if (!surface_valid(destination)) {
+        return;
+    }
+    surface_blit_clipped(destination, source, destination_x, destination_y,
+                         region_make(0, 0, (int64_t)destination->width,
+                                     (int64_t)destination->height));
+}
+
+void surface_blit_clipped(struct surface *destination, const struct surface *source,
+                          int64_t destination_x, int64_t destination_y,
+                          struct region clip)
+{
     if (!surface_valid(destination) || !surface_valid(source)) {
         return;
     }
+    /* Trimmed to the destination first, so a caller passing a clip larger than
+     * the surface cannot walk off the end of it. */
+    clip = region_clip(clip, (int64_t)destination->width, (int64_t)destination->height);
+    if (region_empty(&clip)) {
+        return;
+    }
+
     struct clipped_axis horizontal;
     struct clipped_axis vertical;
     if (!clip_axis(destination_x, source->width, destination->width, &horizontal) ||
         !clip_axis(destination_y, source->height, destination->height, &vertical)) {
         return;
     }
-    for (uint32_t row = 0; row < vertical.count; row++) {
-        const uint32_t source_y = vertical.source_start + row;
-        const uint32_t target_y = vertical.target_start + row;
-        for (uint32_t column = 0; column < horizontal.count; column++) {
-            const uint32_t source_x = horizontal.source_start + column;
-            const uint32_t target_x = horizontal.target_start + column;
+
+    /* What the blit would have covered, narrowed to what the caller asked for.
+     * Both starts move together, because dropping a destination column means
+     * dropping the source column that would have landed on it. */
+    const struct region covered =
+        region_make((int64_t)horizontal.target_start, (int64_t)vertical.target_start,
+                    (int64_t)horizontal.count, (int64_t)vertical.count);
+    const struct region wanted = region_intersect(covered, clip);
+    if (region_empty(&wanted)) {
+        return;
+    }
+
+    const uint32_t skip_x = (uint32_t)(wanted.x - covered.x);
+    const uint32_t skip_y = (uint32_t)(wanted.y - covered.y);
+
+    for (int64_t row = 0; row < wanted.height; row++) {
+        const uint32_t source_y = vertical.source_start + skip_y + (uint32_t)row;
+        const uint32_t target_y = vertical.target_start + skip_y + (uint32_t)row;
+        for (int64_t column = 0; column < wanted.width; column++) {
+            const uint32_t source_x = horizontal.source_start + skip_x + (uint32_t)column;
+            const uint32_t target_x = horizontal.target_start + skip_x + (uint32_t)column;
             destination->pixels[(size_t)target_y * destination->stride + target_x] =
                 source->pixels[(size_t)source_y * source->stride + source_x];
         }

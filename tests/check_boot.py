@@ -593,6 +593,69 @@ def check_log() -> list[str]:
     return notes
 
 
+
+# M16. How much a single cursor movement is allowed to cost, in pixels written
+# to the display. Two cursor rectangles with their outlines are 2 x 10 x 14 =
+# 280, and a union of two overlapping ones is smaller still. The whole screen at
+# the resolution this boots in is 1,024,000, and the old code presented it twice
+# per movement, so anything near that number means the fast path is gone.
+#
+# Generous on purpose. The number that matters is not 254 versus 300, it is 254
+# versus two million.
+MAX_CURSOR_PIXELS_PER_MOVE = 8000
+
+
+def check_cursor_cost() -> list[str]:
+    """The mouse moved without repainting the screen. See M16.
+
+    Read from the kernel's own counters rather than timed from outside, because
+    a wall clock measurement of an emulator running on a shared machine would
+    fail for reasons that have nothing to do with ME OS.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    lines = [line for line in text.splitlines() if "input packets" in line]
+    if not lines:
+        raise CheckFailed("the kernel never reported its input counters")
+
+    fields = {}
+    for pair in lines[-1].split("me-os: input ")[-1].split():
+        if pair.isdigit():
+            fields[last] = int(pair)
+        else:
+            last = pair
+
+    for name in ("packets", "cursor", "whole", "region", "cursorpixels"):
+        if name not in fields:
+            raise CheckFailed(f"the input counter line has no {name!r}: {lines[-1]!r}")
+
+    if fields["packets"] == 0:
+        raise CheckFailed("the kernel saw no mouse packets at all")
+    if fields["cursor"] == 0:
+        raise CheckFailed("the mouse moved and the cursor never updated")
+
+    per_move = fields["cursorpixels"] / fields["cursor"]
+    if per_move > MAX_CURSOR_PIXELS_PER_MOVE:
+        raise CheckFailed(
+            f"a cursor movement wrote {per_move:.0f} pixels to the display, over the "
+            f"{MAX_CURSOR_PIXELS_PER_MOVE} allowed. The dirty region fast path has "
+            f"been lost and the mouse is repainting the screen again")
+
+    # Whole screen presentations are for startup and for a focus change that
+    # reorders windows. Cursor movement must never be a reason for one, so this
+    # stays a small constant however far the mouse travels.
+    if fields["whole"] > 16:
+        raise CheckFailed(
+            f"the kernel composed the whole screen {fields['whole']} times, which is "
+            f"more than startup and the two focus changes need. Something on the "
+            f"input path is repainting everything again")
+
+    return [
+        f"M16 input cost: {fields['packets']} mouse packets became "
+        f"{fields['cursor']} cursor updates costing {per_move:.0f} pixels each, "
+        f"with {fields['whole']} whole screen compositions in the entire run"
+    ]
+
+
 def check_cursor_movement(start, moved, clamped, size) -> list[str]:
     """The cursor tracks the mouse, keeps its shape, and stops at the edge."""
     width, height = size
@@ -909,17 +972,19 @@ def main() -> int:
             drag_ready_cursor, drag_held_cursor, drag_release_cursor, size)
         notes += check_rotation()
         notes += check_log()
+        notes += check_cursor_cost()
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
         return 1
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M15 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M16 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
-          "two opaque window surfaces with click focus and routed input")
+          "two opaque window surfaces with click focus and routed input, all of it "
+          "presented through dirty regions rather than whole screen repaints")
     print("A person should still watch it boot once with make run.")
     return 0
 

@@ -203,6 +203,67 @@ adds two captures: one after clicking System and one after clicking Demo. Pixel
 samples prove Demo was raised over System, while both kernel logs record the
 focus transitions to window IDs 2 then 1.
 
+## M16 dirty regions and an immediate cursor
+
+Done. The mouse was noticeably slow, and it was not a feeling. Every mouse
+packet went through one whole screen path: clear 1,024,000 desktop pixels, blit
+every window back over them, then write 1,024,000 pixels out across the graphics
+adapter. Framebuffer memory sits on the far side of that adapter, so those
+writes are the expensive ones, and there were two million of them per cursor
+step because a move presents where the cursor was as well as where it is.
+
+The device reports a hundred times a second and the loop consumed one packet per
+pass. Once a pass cost more than ten milliseconds the controller's buffer filled
+and the cursor fell further behind with every report, so the lag was not a fixed
+delay but a growing one. What was on screen was a position from a packet sent
+seconds earlier.
+
+Three changes.
+
+A region is a rectangle of screen that something has changed. Width and height
+are signed, because clipping two rectangles that miss each other produces a
+negative size, and an unsigned type would turn that into an enormous positive
+one, which is the exact shape of an out of bounds write.
+
+The compositor and the framebuffer both learned to work on one region.
+`compositor_compose` is now `compositor_compose_region` over the whole target,
+and `fb_present` is `fb_present_region` over the whole surface, so there is one
+composition rule and one copying loop rather than two that could come to
+disagree about an edge. A test composes a scene whole and again as overlapping
+patches and compares every pixel.
+
+The input loop drains every packet the controller is holding instead of one.
+Buttons are still handled packet by packet with the pointer where it was when
+that packet arrived, so a click and its release inside one batch stay two events
+in the right order at the right places. Only the drawing waits for the end of
+the batch, which means a backlog collapses into one step rather than being
+replayed at the speed of the display.
+
+The cursor is composed from the window surfaces every time rather than from a
+saved copy of what was underneath it. Saving and restoring is faster still and
+is wrong the moment a window repaints under the cursor, which would stamp stale
+content wherever the cursor had been.
+
+Measured, not asserted. Both versions were built and run through the same
+`make test`, and the kernel counts its own work:
+
+| | whole screen path | dirty regions |
+|---|---|---|
+| cursor updates | 24 | 24 |
+| pixels written for them | 49,152,000 | 5,932 |
+| per cursor movement | 2,048,000 | 247 |
+| total pixels presented | 14,558,208,000 | 225,781,066 |
+
+That is 8,290 times less work for one cursor movement, and 64 times less for
+the run as a whole, because the turning triangle was presenting the whole screen
+on every step too and was starving the mouse alongside its own animation.
+
+`tests/check_boot.py` now reads those counters back and fails if a cursor
+movement costs more than 8,000 pixels or the whole screen is composed more than
+sixteen times in a run. The number that matters is not 247 against 300, it is
+247 against two million. Checked by putting the whole screen path back, which
+fails the check with 2,048,000.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -214,7 +275,7 @@ focus transitions to window IDs 2 then 1.
 
 ## Verification status
 
-M1 to M15 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M16 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

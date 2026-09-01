@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "region.h"
+
 struct surface {
     uint32_t *pixels;
     uint32_t width;
@@ -34,5 +36,15 @@ void surface_draw_string(struct surface *surface, const char *text,
  * are clipped; no coordinate outside either surface is ever dereferenced. */
 void surface_blit(struct surface *destination, const struct surface *source,
                   int64_t destination_x, int64_t destination_y);
+
+/* The same, restricted to `clip` in destination coordinates.
+ *
+ * `surface_blit` is this with a clip covering the whole destination, so there is
+ * one copying loop rather than two that could come to disagree about an edge.
+ * An empty clip copies nothing, which is what lets a compositor skip a window
+ * that does not touch the part of the screen that changed. See M16. */
+void surface_blit_clipped(struct surface *destination, const struct surface *source,
+                          int64_t destination_x, int64_t destination_y,
+                          struct region clip);
 
 #endif /* ME_SURFACE_H */

@@ -171,14 +171,36 @@ void fb_present(const struct surface *surface)
     if (!surface_valid(surface)) {
         return;
     }
-    const uint64_t height = surface->height < fb_h ? surface->height : fb_h;
-    const uint64_t width = surface->width < fb_w ? surface->width : fb_w;
-    for (uint64_t y = 0; y < height; y++) {
+    fb_present_region(surface, region_make(0, 0, (int64_t)surface->width,
+                                           (int64_t)surface->height));
+}
+
+uint64_t fb_present_region(const struct surface *surface, struct region region)
+{
+    if (!surface_valid(surface)) {
+        return 0;
+    }
+    /* Both bounds, because the surface and the screen are not always the same
+     * size: the desktop store is sized for the largest resolution this project
+     * supports and the display may be smaller.
+     *
+     * fb_w and fb_h come from Limine and are compared as signed values here, so
+     * a display larger than INT64_MAX would be needed to make this wrong. */
+    region = region_clip(region, (int64_t)surface->width, (int64_t)surface->height);
+    region = region_clip(region, (int64_t)fb_w, (int64_t)fb_h);
+    if (region_empty(&region)) {
+        return 0;
+    }
+
+    for (int64_t row = 0; row < region.height; row++) {
+        const uint64_t y = (uint64_t)(region.y + row);
         volatile uint32_t *destination =
-            (volatile uint32_t *)(fb_base + y * fb_pitch);
-        const uint32_t *source = surface->pixels + (size_t)y * surface->stride;
-        for (uint64_t x = 0; x < width; x++) {
-            destination[x] = source[x];
+            (volatile uint32_t *)(fb_base + y * fb_pitch) + (uint64_t)region.x;
+        const uint32_t *source =
+            surface->pixels + (size_t)y * surface->stride + (size_t)region.x;
+        for (int64_t column = 0; column < region.width; column++) {
+            destination[column] = source[column];
         }
     }
+    return region_area(region);
 }

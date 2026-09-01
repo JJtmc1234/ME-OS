@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "compositor.h"
+#include "region.h"
 #include "cursor.h"
 #include "surface.h"
 #include "window.h"
@@ -193,12 +194,190 @@ static void test_compositor(void)
     check(!compositor_compose(&manager, NULL, 1), "no target is refused");
 }
 
+/* M16. The narrow paths have to give the same picture as the wide ones, or the
+ * mouse gets faster by drawing something slightly wrong. Checked by composing a
+ * scene twice, once whole and once as a patchwork of regions, and comparing
+ * every pixel.
+ */
+static void test_region_composition_agrees_with_whole_composition(void)
+{
+    printf("composing one region gives exactly what composing everything gives\n");
+
+    uint32_t whole_pixels[64 * 40];
+    uint32_t patch_pixels[64 * 40];
+    uint32_t lower_pixels[20 * 12];
+    uint32_t upper_pixels[16 * 10];
+    struct surface whole, patch, lower, upper;
+
+    check(surface_init(&whole, whole_pixels, 64 * 40, 64, 40), "the whole target");
+    check(surface_init(&patch, patch_pixels, 64 * 40, 64, 40), "the patched target");
+    check(surface_init(&lower, lower_pixels, 20 * 12, 20, 12), "a lower surface");
+    check(surface_init(&upper, upper_pixels, 16 * 10, 16, 10), "one over it");
+    surface_clear(&lower, 0x111111u);
+    surface_clear(&upper, 0x222222u);
+    /* Something inside each window, so a blit that copied the wrong source
+     * column would show as more than a flat colour landing in the right place. */
+    surface_fill_rect(&lower, 2, 2, 4, 4, 0x333333u);
+    surface_fill_rect(&upper, 8, 5, 6, 3, 0x444444u);
+
+    struct window_manager manager;
+    window_manager_init(&manager);
+    const struct window_spec lower_spec = {
+        .geometry = { .x = 5, .y = 6, .width = 20, .height = 12 },
+        .title = "lower",
+    };
+    const struct window_spec upper_spec = {
+        .geometry = { .x = 15, .y = 10, .width = 16, .height = 10 },
+        .title = "upper",
+    };
+    WindowId lower_id = WINDOW_ID_NONE;
+    WindowId upper_id = WINDOW_ID_NONE;
+    check(window_create(&manager, &lower_spec, &lower_id), "a lower window");
+    check(window_create(&manager, &upper_spec, &upper_id), "one over it");
+    check(window_attach_surface(&manager, lower_id, &lower), "lower attached");
+    check(window_attach_surface(&manager, upper_id, &upper), "upper attached");
+
+    check(compositor_compose(&manager, &whole, 0x090909u), "compose everything");
+
+    /* Deliberately not aligned to any window edge, and deliberately overlapping
+     * each other, so a region that double composes a pixel has to give the same
+     * answer as one that composes it once. */
+    surface_clear(&patch, 0xFFFFFFu);
+    const struct region patches[] = {
+        region_make(0, 0, 30, 40),
+        region_make(25, 0, 39, 22),
+        region_make(25, 20, 39, 20),
+        region_make(13, 9, 9, 7),
+    };
+    for (size_t i = 0; i < sizeof patches / sizeof patches[0]; i++) {
+        check(compositor_compose_region(&manager, &patch, 0x090909u, patches[i]),
+              "compose one region");
+    }
+
+    bool identical = true;
+    for (uint32_t y = 0; y < 40 && identical; y++) {
+        for (uint32_t x = 0; x < 64; x++) {
+            if (whole_pixels[y * 64 + x] != patch_pixels[y * 64 + x]) {
+                printf("        first difference at %u,%u: whole %06X patched %06X\n",
+                       x, y, whole_pixels[y * 64 + x], patch_pixels[y * 64 + x]);
+                identical = false;
+                break;
+            }
+        }
+    }
+    check(identical, "every pixel matches the whole composition");
+
+    printf("a region composition changes nothing outside itself\n");
+    surface_clear(&patch, 0xFFFFFFu);
+    check(compositor_compose_region(&manager, &patch, 0x090909u,
+                                    region_make(10, 10, 8, 8)),
+          "compose a small region");
+    bool outside_untouched = true;
+    for (uint32_t y = 0; y < 40; y++) {
+        for (uint32_t x = 0; x < 64; x++) {
+            const bool inside = x >= 10 && x < 18 && y >= 10 && y < 18;
+            if (!inside && patch_pixels[y * 64 + x] != 0xFFFFFFu) {
+                outside_untouched = false;
+            }
+        }
+    }
+    check(outside_untouched, "not one pixel outside the region moved");
+
+    printf("a region off the target is harmless rather than an error\n");
+    check(compositor_compose_region(&manager, &patch, 0x090909u,
+                                    region_make(500, 500, 10, 10)),
+          "a region past the edge composes nothing and succeeds");
+    check(compositor_compose_region(&manager, &patch, 0x090909u, region_none()),
+          "and so does an empty one");
+    check(!compositor_compose_region(NULL, &patch, 0, region_make(0, 0, 4, 4)),
+          "no manager is still refused");
+    check(!compositor_compose_region(&manager, NULL, 0, region_make(0, 0, 4, 4)),
+          "and so is no target");
+}
+
+/* The clipped blit is what makes the region composition possible, so it gets its
+ * own check that it copies the right source pixels and not merely the right
+ * number of them. A clip that moved the destination without moving the source
+ * would shift a window's contents sideways inside its own frame. */
+static void test_clipped_blit_copies_the_right_source_pixels(void)
+{
+    printf("a clipped blit copies the source pixels that belong under the clip\n");
+
+    uint32_t target_pixels[16 * 16];
+    uint32_t source_pixels[8 * 8];
+    struct surface target, source;
+    check(surface_init(&target, target_pixels, 16 * 16, 16, 16), "a target");
+    check(surface_init(&source, source_pixels, 8 * 8, 8, 8), "a source");
+
+    /* Every source pixel carries its own coordinates, so a copy that took the
+     * wrong column shows up as a wrong value rather than as a wrong colour. */
+    for (uint32_t y = 0; y < 8; y++) {
+        for (uint32_t x = 0; x < 8; x++) {
+            source_pixels[y * 8 + x] = 0xC0000000u | (y << 8) | x;
+        }
+    }
+
+    surface_clear(&target, 0);
+    surface_blit_clipped(&target, &source, 4, 4, region_make(6, 6, 3, 3));
+
+    bool right_pixels = true;
+    bool nothing_else = true;
+    for (uint32_t y = 0; y < 16; y++) {
+        for (uint32_t x = 0; x < 16; x++) {
+            const uint32_t got = target_pixels[y * 16 + x];
+            const bool inside = x >= 6 && x < 9 && y >= 6 && y < 9;
+            if (inside) {
+                const uint32_t want = 0xC0000000u | ((y - 4) << 8) | (x - 4);
+                if (got != want) {
+                    right_pixels = false;
+                }
+            } else if (got != 0) {
+                nothing_else = false;
+            }
+        }
+    }
+    check(right_pixels, "the pixels under the clip are the ones from the source");
+    check(nothing_else, "and nothing outside the clip was written");
+
+    printf("a clipped blit agrees with an unclipped one over the whole target\n");
+    uint32_t reference_pixels[16 * 16];
+    struct surface reference;
+    check(surface_init(&reference, reference_pixels, 16 * 16, 16, 16), "a reference");
+    surface_clear(&reference, 0);
+    surface_clear(&target, 0);
+    surface_blit(&reference, &source, -3, 5);
+    surface_blit_clipped(&target, &source, -3, 5, region_make(0, 0, 16, 16));
+    bool same_as_unclipped = true;
+    for (size_t i = 0; i < 16 * 16; i++) {
+        if (reference_pixels[i] != target_pixels[i]) {
+            same_as_unclipped = false;
+        }
+    }
+    check(same_as_unclipped, "including a source hanging off the left edge");
+
+    printf("an empty or missed clip copies nothing\n");
+    surface_clear(&target, 0x5A5A5A5Au);
+    surface_blit_clipped(&target, &source, 4, 4, region_none());
+    surface_blit_clipped(&target, &source, 4, 4, region_make(40, 40, 4, 4));
+    surface_blit_clipped(&target, NULL, 4, 4, region_make(0, 0, 16, 16));
+    surface_blit_clipped(NULL, &source, 4, 4, region_make(0, 0, 16, 16));
+    bool untouched = true;
+    for (size_t i = 0; i < 16 * 16; i++) {
+        if (target_pixels[i] != 0x5A5A5A5Au) {
+            untouched = false;
+        }
+    }
+    check(untouched, "the target is exactly as it was");
+}
+
 int main(void)
 {
     test_surface_creation_and_local_drawing();
     test_blit_clipping();
     test_cursor_overlay();
     test_compositor();
+    test_clipped_blit_copies_the_right_source_pixels();
+    test_region_composition_agrees_with_whole_composition();
 
     if (failures > 0) {
         printf("\n%d surface or compositor check(s) FAILED\n", failures);

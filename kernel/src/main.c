@@ -40,6 +40,7 @@
 #include "mouse.h"
 #include "pointer.h"
 #include "rect.h"
+#include "region.h"
 #include "surface.h"
 #include "timer.h"
 #include "vars.h"
@@ -204,19 +205,114 @@ static uint64_t centred_x(uint64_t chars, uint64_t scale)
     return width < demo_surface.width ? (demo_surface.width - width) / 2 : 0;
 }
 
-/* Apps update only their own surfaces. This is the one path from those
- * surfaces to the framebuffer; the cursor is drawn last as a compositor-owned
- * overlay in the desktop surface. */
-static void present_desktop(void)
+/* M16 counters. Enough to answer why the mouse was slow and whether it still
+ * is, and nothing more. A profiler is not wanted here; six numbers are. */
+static struct {
+    uint64_t mouse_packets;     /* read off the controller */
+    uint64_t mouse_batches;     /* loop passes that found at least one */
+    uint64_t cursor_updates;    /* times the cursor actually moved */
+    uint64_t whole_presents;    /* whole screen composed and written out */
+    uint64_t region_presents;   /* one rectangle composed and written out */
+    uint64_t pixels_presented;  /* pixels actually written to the display */
+    uint64_t cursor_pixels;     /* of those, the ones a cursor move cost */
+} counters;
+
+/* Where the cursor sits on the desktop, outline included.
+ *
+ * Grown by one pixel because `cursor_draw` paints an outline a pixel outside the
+ * arrow itself, and a region built from the arrow alone would leave that outline
+ * behind when the cursor moved off it. */
+static struct region cursor_region(int64_t x, int64_t y)
 {
-    if (!compositor_compose(&window_manager, &desktop_surface, colour_desktop)) {
+    return region_expand(region_make(x, y, CURSOR_WIDTH, CURSOR_HEIGHT), 1);
+}
+
+/* A rectangle drawn in Demo's own coordinates, said in desktop coordinates.
+ *
+ * Read from the window rather than from the constants it was created with, so
+ * this keeps telling the truth once a layout manager starts moving windows. */
+static struct region demo_region(int64_t x, int64_t y, int64_t width, int64_t height)
+{
+    const struct window *window = window_get_const(&window_manager, demo_window_id);
+    if (window == NULL) {
+        return region_none();
+    }
+    const struct region local =
+        region_clip(region_make(x, y, width, height),
+                    (int64_t)window->geometry.width, (int64_t)window->geometry.height);
+    if (region_empty(&local)) {
+        return region_none();
+    }
+    return region_make(local.x + window->geometry.x, local.y + window->geometry.y,
+                       local.width, local.height);
+}
+
+/* Composes one rectangle of the desktop and writes only that rectangle out.
+ *
+ * The cursor is put back whenever the rectangle touches it. It is an overlay the
+ * compositor owns rather than a window, so composing the pixels underneath it is
+ * what removes it, and anything that composes over the cursor has to redraw it
+ * or the cursor disappears wherever a window repaints.
+ *
+ * Composed from the window surfaces every time rather than from a saved copy of
+ * what was underneath. Saving and restoring is faster still and is wrong the
+ * moment a window repaints under the cursor, which would stamp stale content
+ * wherever the cursor had been. */
+static void compose_and_present(struct region region)
+{
+    region = region_clip(region, (int64_t)fb_width(), (int64_t)fb_height());
+    if (region_empty(&region)) {
+        return;
+    }
+    if (!compositor_compose_region(&window_manager, &desktop_surface,
+                                   colour_desktop, region)) {
         fail("could not compose the desktop");
     }
-    if (desktop_cursor_visible) {
+    if (desktop_cursor_visible &&
+        region_overlaps(region, cursor_region(pointer_state.x, pointer_state.y))) {
         cursor_draw(&desktop_surface, pointer_state.x, pointer_state.y,
                     colour_cursor, colour_background);
     }
-    fb_present(&desktop_surface);
+    counters.pixels_presented += fb_present_region(&desktop_surface, region);
+}
+
+/* Apps update only their own surfaces. These two are the one path from those
+ * surfaces to the framebuffer.
+ *
+ * Everything that changes part of the screen says which part. Before M16 there
+ * was only the whole screen version below, and every mouse packet went through
+ * it: at 1280x800 that cleared 1,024,000 desktop pixels, blitted every window
+ * back over them, and then wrote 1,024,000 pixels out across the graphics
+ * adapter, for a cursor that had moved a few pixels. */
+static void present_region(struct region region)
+{
+    counters.region_presents++;
+    compose_and_present(region);
+}
+
+static void present_desktop(void)
+{
+    counters.whole_presents++;
+    compose_and_present(region_make(0, 0, (int64_t)fb_width(), (int64_t)fb_height()));
+}
+
+static void log_counters(void)
+{
+    log_str("me-os: input packets ");
+    log_dec(counters.mouse_packets);
+    log_str(" batches ");
+    log_dec(counters.mouse_batches);
+    log_str(" cursor ");
+    log_dec(counters.cursor_updates);
+    log_str(" whole ");
+    log_dec(counters.whole_presents);
+    log_str(" region ");
+    log_dec(counters.region_presents);
+    log_str(" pixels ");
+    log_dec(counters.pixels_presented);
+    log_str(" cursorpixels ");
+    log_dec(counters.cursor_pixels);
+    log_str("\n");
 }
 
 /* Replaces the key line. The whole line is cleared first, so a shorter
@@ -230,7 +326,8 @@ static void draw_key_line(const char *text)
     surface_draw_string(&demo_surface, text,
                         (int64_t)centred_x(str_len(text), key_line_scale),
                         (int64_t)key_line_y, colour_text, (uint32_t)key_line_scale);
-    present_desktop();
+    present_region(demo_region(0, (int64_t)key_line_y,
+                               (int64_t)demo_surface.width, (int64_t)height));
 }
 
 /* Erases the rectangle's old row and draws it at its current position. Only
@@ -240,17 +337,28 @@ static void draw_rect(void)
 {
     /* Erase exactly where it was, not the whole row. Since M9 it can move up
      * and down as well, so the old place is not always on the same line. */
+    struct region changed = region_none();
     if (rect_showing) {
         surface_fill_rect(&demo_surface, rect_drawn.x, rect_drawn.y,
                           (uint32_t)rect_drawn.width, (uint32_t)rect_drawn.height,
                           colour_background);
+        changed = demo_region(rect_drawn.x, rect_drawn.y,
+                              (int64_t)rect_drawn.width, (int64_t)rect_drawn.height);
     }
     surface_fill_rect(&demo_surface, rect_state.x, rect_state.y,
                       (uint32_t)rect_state.width, (uint32_t)rect_state.height,
                       colour_rect);
+    changed = region_union(changed,
+                           demo_region(rect_state.x, rect_state.y,
+                                       (int64_t)rect_state.width,
+                                       (int64_t)rect_state.height));
     rect_drawn = rect_state;
     rect_showing = true;
-    present_desktop();
+    /* One rectangle covering where it was and where it is. A step is a few
+     * pixels, so joining the two costs far less than presenting them apart
+     * would cost in a second composition. A drag can jump further, and the
+     * join is still bounded by the window. */
+    present_region(changed);
 }
 
 /* Redraws the sum line in Demo-local coordinates. */
@@ -266,7 +374,8 @@ static void draw_sum_line(void)
     surface_draw_string(&demo_surface, line,
                         (int64_t)centred_x(str_len(line), key_line_scale),
                         (int64_t)sum_line_y, colour_text, (uint32_t)key_line_scale);
-    present_desktop();
+    present_region(demo_region(0, (int64_t)sum_line_y,
+                               (int64_t)demo_surface.width, (int64_t)height));
 }
 
 static bool same_name(const char *a, const char *b)
@@ -312,6 +421,23 @@ static void stroke_triangle(const struct triangle_screen *shape, uint32_t colour
     }
 }
 
+/* The smallest Demo-local rectangle holding all three vertices. */
+static struct region triangle_region(const struct triangle_screen *shape)
+{
+    int64_t left = shape->x[0], right = shape->x[0];
+    int64_t top = shape->y[0], bottom = shape->y[0];
+
+    for (int i = 1; i < TRIANGLE_VERTICES; i++) {
+        if (shape->x[i] < left) left = shape->x[i];
+        if (shape->x[i] > right) right = shape->x[i];
+        if (shape->y[i] < top) top = shape->y[i];
+        if (shape->y[i] > bottom) bottom = shape->y[i];
+    }
+    /* Inclusive of the far vertex, and a pixel of slack on every side, because
+     * a line ends on the pixel it names rather than before it. */
+    return demo_region(left - 1, top - 1, right - left + 3, bottom - top + 3);
+}
+
 /* Erases where the triangle was and draws where it is now. */
 static void redraw_triangle(void)
 {
@@ -319,13 +445,16 @@ static void redraw_triangle(void)
 
     triangle_vertices(&now);
 
+    struct region changed = region_none();
     if (triangle_showing) {
         stroke_triangle(&triangle_drawn, colour_background);
+        changed = triangle_region(&triangle_drawn);
     }
     stroke_triangle(&now, colour_triangle);
+    changed = region_union(changed, triangle_region(&now));
     triangle_drawn = now;
     triangle_showing = true;
-    present_desktop();
+    present_region(changed);
 }
 
 static void show_key(const struct kbd_key *key)
@@ -715,6 +844,7 @@ void kmain(void)
     log_str(",");
     log_dec((uint64_t)pointer_state.y);
     log_str("\n");
+    log_counters();
 
     for (;;) {
         struct kbd_key key;
@@ -744,10 +874,35 @@ void kmain(void)
             redraw_triangle();
         }
 
-        if (mouse_poll(&movement)) {
-            const bool pointer_changed =
+        /* Every packet the controller is holding, not one of them.
+         *
+         * The device reports a hundred times a second. The old loop took one
+         * packet per pass, so once a pass cost more than ten milliseconds the
+         * controller's buffer filled and the cursor fell further behind with
+         * every report. That is what made the mouse feel slow: not a fixed
+         * delay but a growing one, showing a position from a packet sent
+         * seconds earlier. Draining the queue means a backlog collapses into
+         * one step instead of being replayed at the speed of the display.
+         *
+         * Buttons are still handled packet by packet, with the pointer where it
+         * was when that packet arrived, so a click and its release inside one
+         * batch are two events in the right order at the right places. Only the
+         * drawing is deferred to once per batch. */
+        bool any_packet = false;
+        bool cursor_moved = false;
+        bool focus_changed = false;
+        const struct region cursor_was =
+            cursor_region(pointer_state.x, pointer_state.y);
+
+        while (mouse_poll(&movement)) {
+            counters.mouse_packets++;
+            any_packet = true;
+
+            const bool this_packet_moved =
                 pointer_move(&pointer_state, movement.dx, movement.dy,
                              fb_width(), fb_height());
+            cursor_moved = cursor_moved || this_packet_moved;
+
             const bool pressed = movement.left && !mouse_left_down;
             const bool released = !movement.left && mouse_left_down;
             uint8_t buttons = 0;
@@ -755,20 +910,19 @@ void kmain(void)
             if (movement.right) buttons |= WINDOW_MOUSE_RIGHT;
             if (movement.middle) buttons |= WINDOW_MOUSE_MIDDLE;
 
-            bool focus_changed = false;
             if (pressed) {
                 const WindowId before = window_focused(&window_manager);
                 const WindowId target = window_route_pointer(
                     &window_manager, WINDOW_EVENT_MOUSE_DOWN,
                     pointer_state.x, pointer_state.y, buttons);
-                focus_changed = before != window_focused(&window_manager);
-                if (focus_changed) {
+                if (before != window_focused(&window_manager)) {
+                    focus_changed = true;
                     log_str("me-os: focus moved to window ");
                     log_dec(target);
                     log_str("\n");
                 }
             }
-            if (pointer_changed) {
+            if (this_packet_moved) {
                 window_route_pointer(&window_manager, WINDOW_EVENT_MOUSE_MOVE,
                                      pointer_state.x, pointer_state.y, buttons);
             }
@@ -777,9 +931,42 @@ void kmain(void)
                                      pointer_state.x, pointer_state.y, buttons);
             }
             mouse_left_down = movement.left;
+        }
+
+        if (any_packet) {
+            counters.mouse_batches++;
+            /* Before the cursor is presented, because a drag repaints the
+             * rectangle and that repaint has to be underneath the cursor rather
+             * than composed over it afterwards. */
             drain_demo_events();
-            if (pointer_changed || focus_changed) {
+
+            if (focus_changed) {
+                /* Raising a window reorders everything it touches, and the
+                 * cheap answer to which pixels changed is all of them. One
+                 * click is rare enough to pay for. */
                 present_desktop();
+            } else if (cursor_moved) {
+                counters.cursor_updates++;
+                const uint64_t before_pixels = counters.pixels_presented;
+                const struct region cursor_now =
+                    cursor_region(pointer_state.x, pointer_state.y);
+                /* One rectangle when the two overlap, two when they do not.
+                 * Joining a cursor that has flicked across the screen would
+                 * present the whole corridor between the ends, which for a fast
+                 * movement is most of the display. */
+                if (region_overlaps(cursor_was, cursor_now)) {
+                    present_region(region_union(cursor_was, cursor_now));
+                } else {
+                    present_region(cursor_was);
+                    present_region(cursor_now);
+                }
+                counters.cursor_pixels +=
+                    counters.pixels_presented - before_pixels;
+                /* Occasionally, so the numbers reach the boot log without the
+                 * logging itself becoming the slow part of the input path. */
+                if (counters.cursor_updates % 8 == 0) {
+                    log_counters();
+                }
             }
         }
         /* Hints to the processor that this is a spin loop. Interrupts are
