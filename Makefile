@@ -22,6 +22,7 @@ LIMINE_DIR  := boot/limine
 LIMINE_REPO := https://github.com/limine-bootloader/limine.git
 # A tag, not a branch. A moving branch would make the build unreproducible.
 LIMINE_TAG  := v9.6.7-binary
+LIMINE_TOOL := $(LIMINE_DIR)/limine
 
 CC      := gcc
 LD      := ld
@@ -101,13 +102,21 @@ DEPS := $(OBJS:.o=.d)
 # needed, which for ten small binaries costs a second and is always right.
 HEADERS := $(sort $(wildcard kernel/include/*.h))
 
-.PHONY: all check check-tools run run-serial test test-unit clean distclean help
+.PHONY: all iso check check-tools run run-iso run-bios run-serial run-vbox \
+        vbox-capture vbox-remove test test-unit clean distclean help
 
 all: $(ISO)
 
+# A name that says what it makes, since `make` on its own does not.
+iso: $(ISO)
+
 help:
 	@echo "make            build $(ISO)"
+	@echo "make iso        the same thing, said plainly"
 	@echo "make run        boot the ISO in QEMU with a window"
+	@echo "make run-iso    the same, and never anything but the ISO"
+	@echo "make run-bios   boot the same ISO through BIOS instead of UEFI"
+	@echo "make run-vbox   boot the same ISO in VirtualBox"
 	@echo "make test       boot headless and verify the screen automatically"
 	@echo "make test-unit  host side framebuffer bounds checks, no emulator"
 	@echo "make check      check tools, build, then test"
@@ -185,7 +194,24 @@ $(KERNEL): $(OBJS) linker.ld check-fp-isolation
 	@mkdir -p $(dir $@)
 	$(LD) $(OBJS) $(LDFLAGS) -o $@
 
-$(ISO): $(KERNEL) limine.conf | $(LIMINE_DIR)
+# Limine's own installer, which stamps the BIOS boot record into the finished
+# image. Built from the source in the release drop rather than downloaded
+# separately, so the tool and the boot files are always the same version.
+$(LIMINE_TOOL): | $(LIMINE_DIR)
+	$(MAKE) -C $(LIMINE_DIR)
+
+# One ISO that boots two ways.
+#
+# It was UEFI only, which is what QEMU with OVMF wants and is not what most
+# other machines offer first. VirtualBox boots BIOS by default and its EFI is a
+# separate switch, and a real machine may be set either way. A hybrid image
+# carries both: an El Torito BIOS boot catalogue and an EFI system partition,
+# and the firmware picks whichever it understands.
+#
+# Two images, one per firmware, was the alternative. One image is better for the
+# same reason one log is: two of them is two answers to what ME OS is, and the
+# one that gets tested is not necessarily the one that gets booted.
+$(ISO): $(KERNEL) limine.conf $(LIMINE_TOOL) | $(LIMINE_DIR)
 	@command -v $(XORRISO) >/dev/null 2>&1 || { \
 		echo "missing $(XORRISO), needed to build the ISO. Run make check-tools." >&2; exit 1; }
 	@test -f $(LIMINE_DIR)/BOOTX64.EFI || { \
@@ -193,16 +219,21 @@ $(ISO): $(KERNEL) limine.conf | $(LIMINE_DIR)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL) $(ISO_ROOT)/boot/kernel.elf
 	cp limine.conf $(ISO_ROOT)/boot/limine/
+	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
+	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-uefi-cd.bin $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/BOOTX64.EFI $(ISO_ROOT)/EFI/BOOT/
 	$(XORRISO) -as mkisofs -R -r -J \
 		-volid ME_OS --modification-date=$(ISO_DATE) \
 		--set_all_file_dates $(ISO_DATE) \
 		--gpt_disk_guid $(ISO_GUID) \
+		-b boot/limine/limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image \
 		--protective-msdos-label \
 		$(ISO_ROOT) -o $(ISO)
+	$(LIMINE_TOOL) bios-install $(ISO)
 
 # A fresh copy, because OVMF writes its variable store back to this file.
 $(OVMF_LOCAL):
@@ -221,9 +252,31 @@ run: $(ISO) $(OVMF_LOCAL)
 	@test -n "$(OVMF_CODE)" || { echo "no OVMF firmware found. Run make check-tools." >&2; exit 1; }
 	$(QEMU) $(QEMU_COMMON) -debugcon stdio
 
+# The same thing under a name that says which image is booting, so there is no
+# question of whether what ran came from $(ISO) or from somewhere else.
+run-iso: run
+
+# The other half of the hybrid image. No OVMF, so QEMU's own SeaBIOS boots it,
+# which is the path VirtualBox takes by default and the one a real machine takes
+# when its firmware is set to legacy.
+run-bios: $(ISO)
+	$(QEMU) -machine q35 -m 512M -cdrom $(ISO) -boot d \
+		-no-reboot -no-shutdown -debugcon stdio
+
 # Same, with the kernel log on the terminal through the serial port.
 run-serial: $(ISO) $(OVMF_LOCAL)
 	$(QEMU) $(QEMU_COMMON) -serial stdio
+
+# The same ISO in VirtualBox, in a machine of its own. The script needs no root,
+# writes to no real disk, and refuses to act on any machine not named ME-OS.
+run-vbox: $(ISO)
+	scripts/vbox.sh run
+
+vbox-capture: $(ISO)
+	scripts/vbox.sh capture
+
+vbox-remove:
+	scripts/vbox.sh remove
 
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.

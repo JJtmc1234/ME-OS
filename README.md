@@ -9,9 +9,10 @@ conventions, reliability and recovery as core features, agent native computing,
 an agent centric desktop, and eventual integration with Carl and the wider ME
 ecosystem.
 
-Status today: a software prototype that boots in QEMU. It has not been booted on
-a physical machine. That is a later step, and nothing in this repository writes
-to a disk or a USB device.
+Status today: a software prototype that boots from one ISO in both QEMU and
+VirtualBox, through either UEFI or BIOS, and reaches a tiling desktop with a
+terminal you can type at. It has not been booted on a physical machine. That is
+a later step, and nothing in this repository writes to a disk or a USB device.
 
 ## Current state
 
@@ -32,14 +33,69 @@ to a disk or a USB device.
 | M13 window object model | Stable IDs, geometry, lifetime and deterministic z-order | Verified software milestone, QEMU |
 | M14 window surfaces and compositor | Window-local drawing and ordered framebuffer composition | Verified software milestone, QEMU |
 | M15 focus and event queues | Focused input routed as bounded per-window events | Verified software milestone, QEMU |
-| M16 window chrome and dragging | Title bars, close controls and moving whole windows | Next |
+| M16 dirty regions and an immediate cursor | The cursor costs 247 pixels a move instead of two million | Verified software milestone, QEMU |
+| M17 tiling layout | One to eight windows, no two of them sharing a pixel | Verified software milestone, QEMU |
+| M18 the ME OS Default desktop | Bars, frames, focus, keyboard control and a launcher | Verified software milestone, QEMU |
+| M19 terminal and system information | A shell whose answers all come from the machine | Verified software milestone, QEMU |
+| M20 workspaces | More than one set of tiles, switched by keyboard | Next |
 
-All fifteen finished milestones are checked automatically. `make test` boots the image
-headlessly, injects a key press, moves the mouse, and inspects the resulting
-framebuffers. `make test-unit` checks framebuffer clipping, mouse packet
-decoding, pointer clamping, arithmetic and the variable table on the
-development machine, without an emulator. See
-[docs/milestones.md](docs/milestones.md) for the full roadmap.
+All nineteen finished milestones are checked automatically. `make test` boots the
+image headlessly, types at it, moves the mouse, opens and closes windows, and
+inspects the resulting framebuffers and the kernel's own log. `make test-unit`
+runs fifteen programs on the development machine with no emulator, covering
+framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
+clamping, the tiling layout, the desktop, the terminal and its commands, and
+the processor identification. See [docs/milestones.md](docs/milestones.md) for
+the full roadmap.
+
+## Running it
+
+```sh
+make iso        # build build/me-os.iso
+make run        # boot it in QEMU through UEFI
+make run-bios   # boot the same ISO through BIOS instead
+make test       # boot it headless and check what was drawn
+make test-unit  # the host side checks, no emulator needed
+```
+
+One ISO boots both ways. It carries an El Torito BIOS boot catalogue and an EFI
+system partition, and the firmware takes whichever it understands. Two images,
+one per firmware, would be two answers to what ME OS is, and the one that gets
+tested is not necessarily the one that gets booted.
+
+### VirtualBox
+
+The same `build/me-os.iso`, in a virtual machine of its own:
+
+```sh
+scripts/vbox.sh            # create or update the machine and start it
+scripts/vbox.sh capture    # start it headless, save a screenshot, stop it
+scripts/vbox.sh remove     # unregister and delete the machine
+```
+
+It needs no root, writes to no real disk, and refuses to act on any machine not
+named `ME-OS`. The machine it makes has 512 MB, one processor, the VBoxVGA
+adapter, PS/2 keyboard and mouse, and no disk, network, audio or USB. A device
+ME OS does not drive can only add a way to fail.
+
+VirtualBox boots the BIOS half of the image and gives a 1024x768 framebuffer
+where QEMU with OVMF gives 1280x800. Everything lays itself out from the
+resolution it is given, so nothing about the desktop is different apart from its
+size. The mouse is the same PS/2 driver in both. There is no VirtualBox specific
+code anywhere in the kernel.
+
+### What you can do once it boots
+
+Ctrl and an arrow moves focus between tiles. Ctrl H hides the focused window and
+the others grow into the space. Ctrl S brings them all back. Ctrl N and Ctrl W
+move the divider between the two columns. The taskbar buttons focus a window or
+bring back a hidden one, and the ME OS mark opens a small launcher.
+
+The Terminal window takes commands. `HELP` lists them. `CPU` asks the processor
+through CPUID, `MEM` adds up the memory map the bootloader handed over, `RES`
+reports the resolution, `UPTIME` reads the same clock the rectangle moves on, and
+`WINDOWS` counts the real windows. Nothing invents a filesystem, a process list
+or a network, because there are none.
 
 ## Success conditions
 
