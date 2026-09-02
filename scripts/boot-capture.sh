@@ -163,6 +163,28 @@ move_pointer_to() {
     done
 }
 
+# Types one line at the terminal and presses Enter.
+#
+# The monitor names keys rather than taking characters, and the few punctuation
+# marks a path needs have names of their own. Anything not listed is sent as
+# itself, which covers the letters and the digits.
+type_line() {
+    local text="$1" i c
+    for ((i = 0; i < ${#text}; i++)); do
+        c="${text:$i:1}"
+        case "$c" in
+            " ") echo "sendkey spc" ;;
+            "/") echo "sendkey slash" ;;
+            ".") echo "sendkey dot" ;;
+            ">") echo "sendkey shift-dot" ;;
+            *)   echo "sendkey $c" ;;
+        esac
+        sleep 0.07
+    done
+    echo "sendkey ret"
+    sleep 0.6
+}
+
 # The middle of the M5 rectangle, in screen coordinates, from what the kernel
 # has most recently said about itself. The rectangle drifts, so its place is a
 # function of how long the machine has been up and cannot be worked out here.
@@ -350,17 +372,20 @@ rectangle_centre() {
     sleep "$TYPE_DELAY"
     echo "mouse_button 0"
     sleep 1
-    for key in v e r; do
-        echo "sendkey $key"
-        sleep "$TYPE_DELAY"
-    done
-    echo "sendkey ret"
-    sleep 1
-    for key in c p u; do
-        echo "sendkey $key"
-        sleep "$TYPE_DELAY"
-    done
-    echo "sendkey ret"
+    type_line "ver"
+    type_line "cpu"
+
+    # M20. The filesystem, driven the way a person would: look around, go
+    # somewhere, read a file the kernel wrote, then make one and read it back.
+    type_line "pwd"
+    type_line "ls /"
+    type_line "cd /docs"
+    type_line "cat readme.txt"
+    type_line "cd /home"
+    type_line "mkdir projects"
+    type_line "echo tiling works > projects/note.txt"
+    type_line "cat projects/note.txt"
+    type_line "ls projects"
     sleep 2
     echo "screendump $SHOT_FOCUS_SYSTEM"
     sleep 2

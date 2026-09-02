@@ -98,8 +98,12 @@ static void test_arithmetic_keys(void)
      * with no working less than and nothing in either suite would say so. */
     check(gives(0x33, true, '<'), "shift and comma gives a less than");
     check(gives(0x34, true, '>'), "shift and full stop gives a greater than");
-    check(refuses(0x33, false), "comma unshifted is not a key this layout knows");
-    check(refuses(0x34, false), "nor is full stop unshifted");
+    /* Both of these were refused until M20. A shell that lists README.TXT and
+     * then cannot be told to open it is a shell with a hole in it. */
+    check(gives(0x33, false, ','), "comma unshifted is a comma");
+    check(gives(0x34, false, '.'), "and full stop unshifted is a full stop");
+    check(gives(0x0C, false, '-'), "minus unshifted is a minus");
+    check(gives(0x0C, true, '_'), "and shifted it is an underscore");
 
     printf("and the same keys unshifted are still their own characters\n");
     check(gives(0x07, false, '6'), "6 without shift");

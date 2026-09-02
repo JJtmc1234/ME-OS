@@ -364,6 +364,43 @@ the tile. Close puts a window away rather than destroying it, and says so in the
 log, because nothing here can build one again from nothing and a close that lost
 an app for the rest of the run would be worse.
 
+## M20 a filesystem, and the commands that move around it
+
+Done. PWD, LS, CD, MKDIR, TOUCH, CAT, WRITE, RM and DF, and `ECHO TEXT > FILE`
+to write one from the keyboard.
+
+None of it is a mock up. There is no disk driver yet, so there is nothing for a
+filesystem to sit on, and the answer was to build a real one in memory rather
+than to print what a filesystem would have said. It has real directories, real
+files, real path resolution with `.` and `..`, and real errors when a path is
+wrong. It is what a machine has before it has a disk.
+
+What it does not do, it says. DF ends by saying that none of it survives a
+restart, every time, because that is the one thing about this filesystem that
+will surprise somebody who has used another one.
+
+One fixed block per file, held inside the node, rather than an allocator. A bump
+allocator would leak on every rewrite and a real one is a milestone of its own,
+whereas a fixed block cannot fragment, cannot leak and cannot be got wrong. The
+cost is that a small file takes as much room as a large one, which matters when
+there is a disk and does not matter yet.
+
+Three things the tests are really for. A path made of enough `..` has to stop at
+the root rather than walking off the front of the node table, so the root is its
+own parent. Unlinking has to leave the sibling list joined up, checked by
+removing the middle of three and then the first. And the directory you are
+standing in must not be deletable, because that would leave every relative path
+after it resolving into a node nothing points at. Each was checked by breaking
+it: without the last guard, four checks fail.
+
+A file that is given more than it can hold is refused rather than cut. A file
+that quietly held less than it was given is a file whose contents nobody can
+trust, which is worse than one that will not take them.
+
+The shell found a real gap in the keyboard. It listed README.TXT and then could
+not be told to open it, because full stop was only decoded with shift held,
+where it is a greater than sign. Comma, full stop and underscore are now keys.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -375,7 +412,7 @@ an app for the rest of the run would be worse.
 
 ## Verification status
 
-M1 to M19 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M20 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

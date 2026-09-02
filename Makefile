@@ -346,12 +346,19 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
 $(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
+                    kernel/src/cmdfs.c kernel/src/vfs.c \
                     kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
                     $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
-		kernel/src/cmd.c kernel/src/surface.c kernel/src/font.c \
-		kernel/src/region.c -o $@
+		kernel/src/cmd.c kernel/src/cmdfs.c kernel/src/vfs.c \
+		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
+
+# The filesystem on its own. Path resolution, the root that cannot be climbed
+# out of, and the working directory that must not be deleted from under you.
+$(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/vfs_test.c kernel/src/vfs.c -o $@
 
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
@@ -427,7 +434,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test \
            $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
            $(BUILD)/shell_test $(BUILD)/desktop_test \
-           $(BUILD)/term_test $(BUILD)/cpu_test
+           $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -442,6 +449,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/tile_test
 	$(BUILD)/shell_test
 	$(BUILD)/desktop_test
+	$(BUILD)/vfs_test
 	$(BUILD)/term_test
 	$(BUILD)/cpu_test
 

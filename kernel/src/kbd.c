@@ -38,6 +38,10 @@ static const char printable[128] = {
      * unshifted key is what counts: '=' is a key, '+' comes from the keypad. */
     [0x0C] = '-', [0x0D] = '=', [0x35] = '/',
     [0x4A] = '-', [0x4E] = '+', [0x37] = '*',
+    /* Punctuation, added in M20 when there were filenames to type. Until then
+     * these keys were only known with shift held, so README.TXT could not be
+     * typed at the shell that had just listed it. */
+    [0x33] = ',', [0x34] = '.',
 };
 
 /* Only the shifted keys the calculator needs. Everything else is unaffected,
@@ -48,6 +52,7 @@ static const char shifted[128] = {
     [0x0D] = '+',   /* shift and equals */
     [0x33] = '<',   /* shift and comma */
     [0x34] = '>',   /* shift and full stop */
+    [0x0C] = '_',   /* shift and minus, for names with words in them */
 };
 
 static const char *named(uint8_t code)

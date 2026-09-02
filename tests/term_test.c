@@ -10,6 +10,7 @@
 
 #include "cmd.h"
 #include "term.h"
+#include "vfs.h"
 
 static int failures;
 
@@ -289,6 +290,133 @@ static void test_the_commands_answer_with_what_the_machine_knows(void)
     check(strcmp(row_of(&term, 2, row), "") == 0, "and nothing else was printed");
 }
 
+/* M20. The file commands do the real thing to the real filesystem, so what is
+ * checked is what ended up in the tree, not only what was printed. */
+static void test_the_file_commands(void)
+{
+    printf("the shell moves around a real tree\n");
+    struct term term;
+    struct vfs fs;
+    char row[TERM_MAX_COLS + 1];
+    term_init(&term, 60, 24);
+    vfs_init(&fs);
+
+    struct cmd_context context = { .term = &term, .fs = &fs, .version = "0.20" };
+
+    cmd_run(&context, "PWD");
+    check(strcmp(row_of(&term, 1, row), "/") == 0, "PWD starts at the root");
+
+    term_clear(&term);
+    cmd_run(&context, "MKDIR HOME");
+    check(vfs_resolve(&fs, "/HOME") != VFS_NONE, "MKDIR made the directory");
+
+    term_clear(&term);
+    cmd_run(&context, "CD HOME");
+    check(fs.cwd == vfs_resolve(&fs, "/HOME"), "CD moved there");
+    check(strcmp(row_of(&term, 1, row), "/HOME") == 0, "and said where it went");
+
+    term_clear(&term);
+    cmd_run(&context, "TOUCH NOTES.TXT");
+    check(vfs_resolve(&fs, "/HOME/NOTES.TXT") != VFS_NONE,
+          "TOUCH made a file where we are, not at the root");
+
+    printf("writing and reading a file back\n");
+    term_clear(&term);
+    cmd_run(&context, "WRITE NOTES.TXT HELLO THERE");
+    char text[VFS_FILE_MAX + 1];
+    vfs_read(&fs, "/HOME/NOTES.TXT", text, sizeof text, NULL);
+    check(strcmp(text, "HELLO THERE") == 0, "WRITE keeps the spaces in the line");
+
+    term_clear(&term);
+    cmd_run(&context, "CAT NOTES.TXT");
+    check(strcmp(row_of(&term, 1, row), "HELLO THERE") == 0, "CAT shows it");
+
+    printf("an arrow writes to a file instead of printing\n");
+    term_clear(&term);
+    cmd_run(&context, "ECHO REDIRECTED > OUT.TXT");
+    vfs_read(&fs, "/HOME/OUT.TXT", text, sizeof text, NULL);
+    check(strcmp(text, "REDIRECTED") == 0, "the text went into the file");
+    check(strcmp(row_of(&term, 1, row), "") == 0, "and not onto the screen");
+
+    printf("listing shows what is there and counts it\n");
+    term_clear(&term);
+    cmd_run(&context, "LS");
+    check(strstr(row_of(&term, 1, row), "NOTES.TXT") != NULL, "the first file");
+    check(strstr(row_of(&term, 2, row), "OUT.TXT") != NULL, "and the second");
+    check(strstr(row_of(&term, 3, row), "2 FILES") != NULL, "with a count");
+
+    term_clear(&term);
+    cmd_run(&context, "LS /NOWHERE");
+    check(strstr(row_of(&term, 1, row), "NO SUCH FILE") != NULL,
+          "a listing of nothing says so");
+
+    printf("removing, and refusing to remove\n");
+    term_clear(&term);
+    cmd_run(&context, "RM NOTES.TXT");
+    check(vfs_resolve(&fs, "/HOME/NOTES.TXT") == VFS_NONE, "RM took the file away");
+
+    term_clear(&term);
+    cmd_run(&context, "CD /");
+    cmd_run(&context, "RM HOME");
+    check(vfs_resolve(&fs, "/HOME") != VFS_NONE, "a directory with a file in it stays");
+    check(strstr(row_of(&term, 3, row), "NOT EMPTY") != NULL, "and says why");
+
+    printf("an empty directory lists as empty rather than as nothing\n");
+    term_clear(&term);
+    cmd_run(&context, "MKDIR TMP");
+    cmd_run(&context, "LS TMP");
+    check(strstr(row_of(&term, 2, row), "EMPTY") != NULL, "it says so");
+
+    printf("DF says how much room there is and that none of it lasts\n");
+    term_clear(&term);
+    cmd_run(&context, "DF");
+    bool warned = false;
+    for (uint32_t y = 0; y < 8; y++) {
+        if (strstr(row_of(&term, y, row), "SURVIVES A RESTART") != NULL) {
+            warned = true;
+        }
+    }
+    check(warned, "the one surprising thing about it is said every time");
+
+    printf("with no filesystem the file commands are not offered at all\n");
+    term_clear(&term);
+    struct cmd_context bare = { .term = &term, .version = "0.20" };
+    cmd_run(&bare, "PWD");
+    check(strstr(row_of(&term, 1, row), "NO SUCH COMMAND") != NULL,
+          "PWD is unknown rather than crashing");
+}
+
+static void test_redirection_is_split_correctly(void)
+{
+    printf("an arrow is found and both sides are trimmed\n");
+    char command[64];
+    char target[64];
+
+    check(cmd_split_redirect("ECHO HI > NOTES", command, sizeof command,
+                             target, sizeof target),
+          "a line with an arrow");
+    check(strcmp(command, "ECHO HI") == 0, "the command has no trailing space");
+    check(strcmp(target, "NOTES") == 0, "and the name no leading one");
+
+    check(cmd_split_redirect("ECHO HI>NOTES", command, sizeof command,
+                             target, sizeof target),
+          "with no spaces at all");
+    check(strcmp(command, "ECHO HI") == 0, "it still splits");
+    check(strcmp(target, "NOTES") == 0, "on both sides");
+
+    check(!cmd_split_redirect("ECHO HI", command, sizeof command,
+                              target, sizeof target),
+          "a line with no arrow is not a redirection");
+    check(!cmd_split_redirect("ECHO HI >", command, sizeof command,
+                              target, sizeof target),
+          "and nor is an arrow with nothing after it");
+    check(!cmd_split_redirect("> NOTES", command, sizeof command,
+                              target, sizeof target),
+          "or one with nothing before it");
+    check(!cmd_split_redirect(NULL, command, sizeof command, target, sizeof target),
+          "no line at all is refused");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -297,6 +425,8 @@ int main(void)
     test_the_line_editor();
     test_resizing_keeps_the_state_sensible();
     test_the_commands_answer_with_what_the_machine_knows();
+    test_redirection_is_split_correctly();
+    test_the_file_commands();
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

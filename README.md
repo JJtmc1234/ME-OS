@@ -37,16 +37,17 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M17 tiling layout | One to eight windows, no two of them sharing a pixel | Verified software milestone, QEMU |
 | M18 the ME OS Default desktop | Bars, frames, focus, keyboard control and a launcher | Verified software milestone, QEMU |
 | M19 terminal and system information | A shell whose answers all come from the machine | Verified software milestone, QEMU |
-| M20 workspaces | More than one set of tiles, switched by keyboard | Next |
+| M20 filesystem and file commands | A real tree in memory, and PWD, LS, CD, MKDIR, CAT and the rest | Verified software milestone, QEMU |
+| M21 workspaces | More than one set of tiles, switched by keyboard | Next |
 
-All nineteen finished milestones are checked automatically. `make test` boots the
+All twenty finished milestones are checked automatically. `make test` boots the
 image headlessly, types at it, moves the mouse, opens and closes windows, and
 inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs fifteen programs on the development machine with no emulator, covering
+runs seventeen programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
 clamping, the tiling layout, the desktop, the terminal and its commands, and
-the processor identification. See [docs/milestones.md](docs/milestones.md) for
-the full roadmap.
+the processor identification, and the filesystem. See
+[docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it
 
@@ -98,11 +99,18 @@ the others grow into the space. Ctrl S brings them all back. Ctrl N and Ctrl W
 move the divider between the two columns. The taskbar buttons focus a window or
 bring back a hidden one, and the ME OS mark opens a small launcher.
 
-The Terminal window takes commands. `HELP` lists them. `CPU` asks the processor
-through CPUID, `MEM` adds up the memory map the bootloader handed over, `RES`
-reports the resolution, `UPTIME` reads the same clock the rectangle moves on, and
-`WINDOWS` counts the real windows. Nothing invents a filesystem, a process list
-or a network, because there are none.
+The Terminal window takes commands. `HELP` lists them.
+
+`CPU` asks the processor through CPUID, `MEM` adds up the memory map the
+bootloader handed over, `RES` reports the resolution, `UPTIME` reads the same
+clock the rectangle moves on, and `WINDOWS` counts the real windows.
+
+`PWD`, `LS`, `CD`, `MKDIR`, `TOUCH`, `CAT`, `WRITE`, `RM` and `DF` move around a
+real filesystem, and `ECHO TEXT > FILE` writes one from the keyboard. It lives in
+memory, because there is no disk driver yet, so nothing in it survives a restart
+and `DF` says so every time it is asked.
+
+Nothing invents a process list or a network, because there are none.
 
 ## Success conditions
 

@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "term.h"
+#include "vfs.h"
 
 /* Everything the commands may report, gathered by the caller, which is the only
  * thing that can see the framebuffer, the clock and the window manager. */
@@ -34,6 +35,9 @@ struct cmd_context {
     const char *cpu_vendor;
     const char *cpu_brand;
     const char *version;
+    /* The filesystem the file commands act on. In memory, because there is no
+     * disk driver yet, and real all the same. */
+    struct vfs *fs;
 };
 
 /* Runs one line. An empty line is not an error and prints nothing extra, which
@@ -49,5 +53,24 @@ uint64_t cmd_split(const char *line, char *name, uint64_t capacity,
 /* Pure. A size in bytes as a number and a unit, so MEM does not print eleven
  * digits and leave the reader to count them. */
 void cmd_format_size(uint64_t bytes, char *out, uint64_t capacity);
+
+/* Pure. Splits a line at an unquoted `>`, so `ECHO HI > NOTES` writes a file.
+ * The part before the arrow is copied into `command` and the name after it into
+ * `target`. Returns false when there is no arrow, in which case neither is
+ * touched and the caller runs the line as it stands. */
+bool cmd_split_redirect(const char *line, char *command, uint64_t command_capacity,
+                        char *target, uint64_t target_capacity);
+
+/* The filesystem commands. In their own file because moving around a tree and
+ * asking the machine what it is are two different jobs. */
+void cmdfs_pwd(struct cmd_context *context);
+void cmdfs_ls(struct cmd_context *context, const char *path);
+void cmdfs_cd(struct cmd_context *context, const char *path);
+void cmdfs_mkdir(struct cmd_context *context, const char *path);
+void cmdfs_touch(struct cmd_context *context, const char *path);
+void cmdfs_cat(struct cmd_context *context, const char *path);
+void cmdfs_rm(struct cmd_context *context, const char *path);
+void cmdfs_write(struct cmd_context *context, const char *path, const char *text);
+void cmdfs_df(struct cmd_context *context);
 
 #endif /* ME_CMD_H */

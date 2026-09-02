@@ -39,12 +39,21 @@ struct term {
      * cannot eat the prompt or the output above it. */
     char input[TERM_INPUT_MAX];
     uint32_t input_length;
+    /* What goes before the input. A shell that did not say where it was would
+     * make CD a command with no visible effect. Set by the caller, which is the
+     * only thing that knows there is a filesystem. */
+    char prompt[TERM_INPUT_MAX];
 };
 
 /* `cols` and `rows` are clamped to what the grid can hold and to at least one
  * of each, so a terminal in a tile too small to show anything still has a
  * consistent state rather than a zero sized one. */
 void term_init(struct term *term, uint32_t cols, uint32_t rows);
+
+/* Sets what comes before the typed line. Anything too long for the buffer is
+ * refused rather than cut, because a prompt cut in the middle of a path says
+ * you are somewhere you are not. */
+void term_set_prompt(struct term *term, const char *prompt);
 
 /* Resizes and keeps what is on screen where it can. Text that no longer fits
  * across is cut rather than reflowed: reflowing needs to know where the real

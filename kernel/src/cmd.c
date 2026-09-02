@@ -113,16 +113,28 @@ static void say_size(struct term *term, const char *label, uint64_t bytes)
 
 static void command_help(struct term *term)
 {
-    term_println(term, "COMMANDS");
-    term_println(term, "  HELP     THIS LIST");
+    term_println(term, "THE MACHINE");
     term_println(term, "  VER      WHICH ME OS THIS IS");
     term_println(term, "  CPU      WHAT THE PROCESSOR SAYS IT IS");
     term_println(term, "  MEM      MEMORY THE BOOTLOADER REPORTED");
     term_println(term, "  RES      SCREEN SIZE");
     term_println(term, "  UPTIME   HOW LONG SINCE BOOT");
     term_println(term, "  WINDOWS  HOW MANY ARE OPEN");
+    term_println(term, "FILES");
+    term_println(term, "  PWD      WHERE YOU ARE");
+    term_println(term, "  LS       WHAT IS HERE");
+    term_println(term, "  CD       GO SOMEWHERE");
+    term_println(term, "  MKDIR    MAKE A DIRECTORY");
+    term_println(term, "  TOUCH    MAKE AN EMPTY FILE");
+    term_println(term, "  CAT      SHOW A FILE");
+    term_println(term, "  WRITE    PUT A LINE IN A FILE");
+    term_println(term, "  RM       DELETE A FILE OR EMPTY DIRECTORY");
+    term_println(term, "  DF       HOW MUCH ROOM IS LEFT");
+    term_println(term, "THIS TERMINAL");
     term_println(term, "  ECHO     SAY SOMETHING BACK");
     term_println(term, "  CLEAR    EMPTY THIS SCREEN");
+    term_println(term, "  HELP     THIS LIST");
+    term_println(term, "ECHO TEXT > FILE WRITES INSTEAD OF PRINTING.");
     term_println(term, "KEYS: CTRL ARROWS MOVE FOCUS, CTRL H HIDES,");
     term_println(term, "      CTRL S SHOWS ALL, CTRL N AND W RESIZE.");
 }
@@ -181,6 +193,50 @@ static void command_windows(struct cmd_context *context)
     term_newline(context->term);
 }
 
+bool cmd_split_redirect(const char *line, char *command, uint64_t command_capacity,
+                        char *target, uint64_t target_capacity)
+{
+    if (line == NULL || command == NULL || target == NULL ||
+        command_capacity == 0 || target_capacity == 0) {
+        return false;
+    }
+    uint64_t arrow = 0;
+    bool found = false;
+    for (uint64_t i = 0; line[i] != '\0'; i++) {
+        if (line[i] == '>') {
+            arrow = i;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return false;
+    }
+
+    /* Trailing blanks trimmed from the command, leading ones from the name, so
+     * `ECHO HI > NOTES` writes to NOTES and not to " NOTES". */
+    uint64_t end = arrow;
+    while (end > 0 && line[end - 1] == ' ') {
+        end--;
+    }
+    uint64_t written = 0;
+    for (uint64_t i = 0; i < end && written + 1 < command_capacity; i++) {
+        command[written++] = line[i];
+    }
+    command[written] = '\0';
+
+    uint64_t at = arrow + 1;
+    while (line[at] == ' ') {
+        at++;
+    }
+    written = 0;
+    while (line[at] != '\0' && line[at] != ' ' && written + 1 < target_capacity) {
+        target[written++] = line[at++];
+    }
+    target[written] = '\0';
+    return target[0] != '\0' && command[0] != '\0';
+}
+
 void cmd_run(struct cmd_context *context, const char *line)
 {
     if (context == NULL || context->term == NULL) {
@@ -188,9 +244,11 @@ void cmd_run(struct cmd_context *context, const char *line)
     }
     struct term *term = context->term;
 
-    char echoed[TERM_MAX_COLS + 8];
+    /* The prompt the line was typed at, not a fixed one, so the history shows
+     * which directory each command was run in. */
+    char echoed[TERM_MAX_COLS + TERM_INPUT_MAX + 8];
     uint64_t written = 0;
-    for (const char *p = "ME> "; *p != '\0' && written + 1 < sizeof echoed; p++) {
+    for (const char *p = term->prompt; *p != '\0' && written + 1 < sizeof echoed; p++) {
         echoed[written++] = *p;
     }
     for (uint64_t i = 0; line != NULL && line[i] != '\0' &&
@@ -202,10 +260,74 @@ void cmd_run(struct cmd_context *context, const char *line)
      * is underneath the command that printed it. */
     term_println(term, echoed);
 
+    /* `ECHO HI > NOTES` is the one redirection this shell understands, and it is
+     * enough to make a file from the keyboard. Anything more general needs the
+     * output of every command to be capturable, which is a larger change than
+     * one arrow is worth. */
+    char redirected[TERM_INPUT_MAX];
+    char target[VFS_PATH_MAX];
+    if (context->fs != NULL &&
+        cmd_split_redirect(line, redirected, sizeof redirected,
+                           target, sizeof target)) {
+        char echo_name[32];
+        const char *echo_rest = "";
+        cmd_split(redirected, echo_name, sizeof echo_name, &echo_rest);
+        if (same(echo_name, "ECHO")) {
+            cmdfs_write(context, target, echo_rest);
+            return;
+        }
+        term_println(term, "ONLY ECHO CAN BE WRITTEN TO A FILE SO FAR");
+        return;
+    }
+
     char name[32];
     const char *rest = "";
     if (cmd_split(line, name, sizeof name, &rest) == 0) {
         return;
+    }
+
+    if (context->fs != NULL) {
+        if (same(name, "PWD")) {
+            cmdfs_pwd(context);
+            return;
+        }
+        if (same(name, "LS") || same(name, "DIR")) {
+            cmdfs_ls(context, rest);
+            return;
+        }
+        if (same(name, "CD")) {
+            cmdfs_cd(context, rest);
+            return;
+        }
+        if (same(name, "MKDIR")) {
+            cmdfs_mkdir(context, rest);
+            return;
+        }
+        if (same(name, "TOUCH")) {
+            cmdfs_touch(context, rest);
+            return;
+        }
+        if (same(name, "CAT")) {
+            cmdfs_cat(context, rest);
+            return;
+        }
+        if (same(name, "RM") || same(name, "RMDIR")) {
+            cmdfs_rm(context, rest);
+            return;
+        }
+        if (same(name, "DF")) {
+            cmdfs_df(context);
+            return;
+        }
+        if (same(name, "WRITE")) {
+            /* The name, then everything after it, so a line with spaces in it
+             * lands in the file whole. */
+            char path[VFS_PATH_MAX];
+            const char *text = "";
+            cmd_split(rest, path, sizeof path, &text);
+            cmdfs_write(context, path, text);
+            return;
+        }
     }
 
     if (same(name, "HELP")) {

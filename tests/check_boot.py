@@ -422,7 +422,17 @@ def check_terminal() -> list[str]:
     if len(ran) < 2:
         raise CheckFailed(
             f"the terminal only ran {ran}, so it did not demonstrate a shell")
-    return [f"M19 terminal: ran {', '.join(ran)} and answered each one"]
+
+    # M20. A file was made from the keyboard and read back, which is the whole
+    # claim: the commands act on a real tree rather than printing an answer.
+    made = "ECHO TILING WORKS > PROJECTS/NOTE.TXT"
+    if made not in ran:
+        raise CheckFailed("nothing was written to a file from the terminal")
+    if ran.index(made) > ran.index("CAT PROJECTS/NOTE.TXT"):
+        raise CheckFailed("the file was read before it was written")
+
+    return [f"M19 and M20 terminal: ran {len(ran)} commands including "
+            f"{made.split(' > ')[0].lower()} into a file it then read back"]
 
 
 def check_tiles_on_screen(path: Path) -> list[str]:
@@ -772,6 +782,8 @@ def check_log() -> list[str]:
         "window hidden, the layout reflowed",
         "terminal ran VER",
         "terminal ran CPU",
+        "terminal ran MKDIR PROJECTS",
+        "terminal ran CAT PROJECTS/NOTE.TXT",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -1194,13 +1206,13 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M19 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M20 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
           "presented through dirty regions rather than whole screen repaints, "
-          "tiled into a desktop with a terminal that answers")
+          "tiled into a desktop with a shell that moves around a real filesystem")
     print("A person should still watch it boot once with make run.")
     return 0
 

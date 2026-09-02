@@ -36,10 +36,28 @@ void term_init(struct term *term, uint32_t cols, uint32_t rows)
     *term = (struct term){0};
     term->cols = clamp(cols, 1, TERM_MAX_COLS);
     term->rows = clamp(rows, 1, TERM_MAX_ROWS);
+    term_set_prompt(term, PROMPT);
     for (uint32_t y = 0; y < TERM_MAX_ROWS; y++) {
         for (uint32_t x = 0; x < TERM_MAX_COLS; x++) {
             term->cells[y][x] = ' ';
         }
+    }
+}
+
+void term_set_prompt(struct term *term, const char *prompt)
+{
+    if (term == NULL || prompt == NULL) {
+        return;
+    }
+    uint64_t length = 0;
+    while (prompt[length] != '\0') {
+        length++;
+    }
+    if (length + 1 >= sizeof term->prompt) {
+        return;
+    }
+    for (uint64_t i = 0; i <= length; i++) {
+        term->prompt[i] = prompt[i];
     }
 }
 
@@ -211,7 +229,9 @@ uint64_t term_prompt_line(const struct term *term, char *out, uint64_t capacity)
         return 0;
     }
     uint64_t written = 0;
-    for (const char *p = PROMPT; *p != '\0' && written + 1 < capacity; p++) {
+    const char *prompt = term != NULL && term->prompt[0] != '\0'
+        ? term->prompt : PROMPT;
+    for (const char *p = prompt; *p != '\0' && written + 1 < capacity; p++) {
         out[written++] = *p;
     }
     if (term != NULL) {

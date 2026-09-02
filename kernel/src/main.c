@@ -31,6 +31,7 @@
 #include "compositor.h"
 #include "cmd.h"
 #include "cpu.h"
+#include "vfs.h"
 #include "desktop.h"
 #include "cursor.h"
 #include "fb.h"
@@ -171,6 +172,7 @@ static uint64_t usable_memory_bytes;
 static uint64_t total_memory_bytes;
 static uint64_t memory_regions;
 static bool launcher_open;
+static struct vfs filesystem;
 static uint32_t desktop_pixels[DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT];
 static uint32_t tile_arena[TILE_ARENA_PIXELS];
 
@@ -669,7 +671,7 @@ static void handle_demo_event(const struct window_event *event)
  * process list, because there are none. See M19 in docs/milestones.md.
  */
 
-#define ME_OS_VERSION "0.19"
+#define ME_OS_VERSION "0.20"
 
 /* Adds up what the bootloader said is usable, and what it saw altogether. */
 static void read_memory_map(void)
@@ -746,8 +748,20 @@ static void terminal_key(const struct window_event *event)
         .cpu_vendor = cpu_vendor_text,
         .cpu_brand = cpu_brand_text,
         .version = ME_OS_VERSION,
+        .fs = &filesystem,
     };
     cmd_run(&context, line);
+    /* The prompt follows the working directory, so CD has something to show for
+     * itself and a person can see where they are without asking. */
+    char prompt[VFS_PATH_MAX + 4];
+    const uint64_t at = vfs_path_of(&filesystem, filesystem.cwd, prompt,
+                                    sizeof prompt - 3);
+    prompt[at] = ' ';
+    prompt[at + 1] = '>';
+    prompt[at + 2] = ' ';
+    prompt[at + 3] = '\0';
+    term_set_prompt(&terminal, prompt);
+
     log_str("me-os: terminal ran ");
     log_str(line);
     log_str("\n");
@@ -1441,10 +1455,27 @@ void kmain(void)
     cpu_vendor(cpu_vendor_text, sizeof cpu_vendor_text);
     cpu_brand(cpu_brand_text, sizeof cpu_brand_text);
     read_memory_map();
+    /* A filesystem with something in it, so LS has an answer the first time it
+     * is asked. Everything here is written by the kernel at boot: it is a real
+     * tree in memory, not a picture of one, and it is gone when the machine
+     * restarts because there is no disk driver yet. */
+    vfs_init(&filesystem);
+    if (vfs_mkdir(&filesystem, "/HOME") != VFS_OK ||
+        vfs_mkdir(&filesystem, "/DOCS") != VFS_OK ||
+        vfs_mkdir(&filesystem, "/TMP") != VFS_OK ||
+        vfs_write(&filesystem, "/DOCS/README.TXT",
+                  "ME OS " ME_OS_VERSION ". A TILING DESKTOP AND A SHELL.") != VFS_OK ||
+        vfs_write(&filesystem, "/DOCS/KEYS.TXT",
+                  "CTRL ARROWS MOVE FOCUS. CTRL H HIDES. CTRL S SHOWS ALL.") != VFS_OK ||
+        vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
+        fail("could not lay out the filesystem");
+    }
+
     term_init(&terminal, TERM_MAX_COLS, TERM_MAX_ROWS);
     term_println(&terminal, "ME OS " ME_OS_VERSION);
     term_println(&terminal, "TYPE HELP FOR A LIST OF COMMANDS.");
     term_newline(&terminal);
+    term_set_prompt(&terminal, "/HOME > ");
 
     /* Demo alone to begin with. ME OS Default is tiling first, and one window
      * filling the workspace is what that layout does with one window: the tiling
