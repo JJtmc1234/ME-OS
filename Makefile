@@ -39,6 +39,9 @@ SOURCE_DATE_EPOCH ?= 1735689600
 ISO_DATE          ?= 2025010100000000
 # Without this xorriso invents a random GPT identifier per build.
 ISO_GUID          ?= 4d452d4f-5300-4d31-9000-000000000001
+# Four bytes, spelling MEOS, written where Limine's installer would otherwise
+# put a random number.
+ISO_MBR_ID        ?= \115\105\117\123
 
 # OVMF is the UEFI firmware QEMU boots. Distributions disagree about where it
 # lives, so take the first candidate that exists rather than hardcoding one.
@@ -234,6 +237,12 @@ $(ISO): $(KERNEL) limine.conf $(LIMINE_TOOL) | $(LIMINE_DIR)
 		--protective-msdos-label \
 		$(ISO_ROOT) -o $(ISO)
 	$(LIMINE_TOOL) bios-install $(ISO)
+	@# The installer writes a random four byte MBR disk identifier at 0x1B8,
+	@# which is the one thing in the image that differs between two builds of
+	@# the same source. It identifies the disk to a partition table nothing here
+	@# uses, so a fixed value is as correct as a random one and is checkable.
+	@# The same reasoning as ISO_DATE and ISO_GUID above.
+	printf '$(ISO_MBR_ID)' | dd of=$(ISO) bs=1 seek=440 conv=notrunc status=none
 
 # A fresh copy, because OVMF writes its variable store back to this file.
 $(OVMF_LOCAL):
@@ -277,6 +286,27 @@ vbox-capture: $(ISO)
 
 vbox-remove:
 	scripts/vbox.sh remove
+
+# Builds the ISO twice from clean and compares the two files.
+#
+# Reproducibility is a claim, so it is checked rather than asserted. Everything
+# that would otherwise vary is pinned: the timestamps, the GPT identifier, the
+# MBR disk identifier, and the build directory, which is mapped out of the
+# binary by -ffile-prefix-map.
+.PHONY: check-reproducible
+check-reproducible:
+	$(MAKE) clean
+	$(MAKE) $(ISO)
+	cp $(ISO) $(BUILD)/first.iso.check
+	mv $(BUILD)/first.iso.check $(BUILD)/../first-iso-check.tmp
+	$(MAKE) clean
+	$(MAKE) $(ISO)
+	@mkdir -p $(BUILD)
+	@mv $(BUILD)/../first-iso-check.tmp $(BUILD)/first.iso.check
+	@cmp $(BUILD)/first.iso.check $(ISO) \
+		&& echo "reproducible: two clean builds are byte for byte identical" \
+		|| { echo "NOT reproducible: the two builds differ" >&2; exit 1; }
+	@$(RM) $(BUILD)/first.iso.check
 
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.

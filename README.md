@@ -56,7 +56,14 @@ make run        # boot it in QEMU through UEFI
 make run-bios   # boot the same ISO through BIOS instead
 make test       # boot it headless and check what was drawn
 make test-unit  # the host side checks, no emulator needed
+make check-reproducible   # build it twice and compare the two files
 ```
+
+The image is reproducible. Two clean builds of the same source produce the same
+file, byte for byte, checked by `make check-reproducible`. Everything that would
+otherwise vary is pinned: the timestamps, the GPT identifier, the MBR disk
+identifier Limine's installer would randomise, and the build directory, which is
+mapped out of the binary by `-ffile-prefix-map`.
 
 One ISO boots both ways. It carries an El Torito BIOS boot catalogue and an EFI
 system partition, and the firmware takes whichever it understands. Two images,
