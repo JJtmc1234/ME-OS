@@ -166,6 +166,31 @@ static void test_refusals(void)
     check(key.ch == '\0', "and nothing was written");
 }
 
+/* M18. Control is tracked exactly the way shift is, and for the same reason:
+ * it has to be seen going down and coming back up, so a key pressed after the
+ * modifier was let go is not still treated as a shortcut. */
+static void test_control_is_tracked_like_shift(void)
+{
+    printf("control goes down and comes back up\n");
+    check(kbd_ctrl_after(0x1D, false), "left control down sets it");
+    check(!kbd_ctrl_after(0x9D, true), "and its release clears it");
+    check(kbd_ctrl_after(0x1D, true), "pressing it again while held keeps it");
+    check(!kbd_ctrl_after(0x9D, false), "releasing it while clear leaves it clear");
+
+    printf("no other key disturbs the control state\n");
+    check(kbd_ctrl_after(0x1E, true), "a letter leaves it held");
+    check(!kbd_ctrl_after(0x1E, false), "and leaves it clear when it was clear");
+    check(kbd_ctrl_after(0x9E, true), "a letter release leaves it held too");
+    check(kbd_ctrl_after(0x2A, true), "and so does shift");
+
+    printf("a translated key claims no modifier of its own\n");
+    struct kbd_key key;
+    check(kbd_translate(0x1E, false, &key) && !key.ctrl,
+          "the pure translator never says control was held");
+    check(kbd_translate_extended(0x48, &key) && !key.ctrl,
+          "and nor does the extended one");
+}
+
 int main(void)
 {
     test_shift_state();
@@ -173,6 +198,7 @@ int main(void)
     test_arithmetic_keys();
     test_arrow_keys();
     test_refusals();
+    test_control_is_tracked_like_shift();
 
     if (failures > 0) {
         printf("\n%d keyboard check(s) FAILED\n", failures);

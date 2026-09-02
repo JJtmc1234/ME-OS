@@ -7,6 +7,7 @@
 #ifndef ME_FONT_H
 #define ME_FONT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define FONT_WIDTH  8
@@ -17,5 +18,13 @@
  * instead of silently rendering as blank space.
  */
 const uint8_t *font_glyph(char c);
+
+/* Whether this font has a real glyph for that character.
+ *
+ * `font_glyph` answers with a box for anything it does not know, which is right
+ * for drawing and useless for deciding. A terminal that stored a character it
+ * cannot draw would show a line that reads back differently from what was
+ * typed. See M19. */
+bool font_knows(char c);
 
 #endif /* ME_FONT_H */

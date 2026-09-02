@@ -69,6 +69,33 @@ bool surface_init(struct surface *surface, uint32_t *pixels, size_t capacity,
     return true;
 }
 
+bool surface_view(const struct surface *parent, int64_t x, int64_t y,
+                  uint32_t width, uint32_t height, struct surface *out)
+{
+    if (out == NULL) {
+        return false;
+    }
+    *out = (struct surface){0};
+    if (!surface_valid(parent) || width == 0 || height == 0) {
+        return false;
+    }
+    /* Clipped is not good enough here. A view that quietly came back smaller
+     * than asked for would have every drawing coordinate inside it mean
+     * something different from what the caller worked out, so the whole
+     * rectangle has to fit or there is no view. */
+    if (x < 0 || y < 0 ||
+        x + (int64_t)width > (int64_t)parent->width ||
+        y + (int64_t)height > (int64_t)parent->height) {
+        return false;
+    }
+
+    out->pixels = parent->pixels + (size_t)y * parent->stride + (size_t)x;
+    out->width = width;
+    out->height = height;
+    out->stride = parent->stride;
+    return true;
+}
+
 bool surface_valid(const struct surface *surface)
 {
     return surface != NULL && surface->pixels != NULL &&

@@ -20,6 +20,19 @@ bool surface_init(struct surface *surface, uint32_t *pixels, size_t capacity,
                   uint32_t width, uint32_t height);
 bool surface_valid(const struct surface *surface);
 
+/* A surface over part of another one, sharing its pixels.
+ *
+ * The stride is what makes this work: rows of the view are rows of the parent,
+ * just narrower and starting further along. Drawing into the view draws into the
+ * parent, which is how a window frame and the app content inside it live in one
+ * buffer and reach the compositor in one blit.
+ *
+ * Refuses a rectangle that is not wholly inside the parent, so a view can never
+ * be the thing that writes outside a window. The view does not own the memory
+ * and must not outlive the parent. */
+bool surface_view(const struct surface *parent, int64_t x, int64_t y,
+                  uint32_t width, uint32_t height, struct surface *out);
+
 void surface_clear(struct surface *surface, uint32_t colour);
 bool surface_put_pixel(struct surface *surface, int64_t x, int64_t y,
                        uint32_t colour);

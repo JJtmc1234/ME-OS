@@ -13,6 +13,7 @@
 
 #define SCANCODE_LEFT_SHIFT  0x2A
 #define SCANCODE_RIGHT_SHIFT 0x36
+#define SCANCODE_CTRL        0x1D
 
 static uint8_t inb(uint16_t port)
 {
@@ -60,6 +61,15 @@ static const char *named(uint8_t code)
     }
 }
 
+bool kbd_ctrl_after(uint8_t code, bool ctrl)
+{
+    const uint8_t key = code & (uint8_t)~SCANCODE_RELEASE;
+    if (key != SCANCODE_CTRL) {
+        return ctrl;
+    }
+    return (code & SCANCODE_RELEASE) == 0;
+}
+
 bool kbd_shift_after(uint8_t code, bool shift)
 {
     const uint8_t key = (uint8_t)(code & 0x7F);
@@ -76,6 +86,9 @@ bool kbd_translate(uint8_t code, bool shift, struct kbd_key *out)
     }
 
     const uint8_t key = (uint8_t)(code & 0x7F);
+    /* False here because a scancode on its own does not say what was held.
+     * kbd_poll is the only thing that tracks modifiers and it fills this in. */
+    out->ctrl = false;
 
     if (shift && shifted[key] != '\0') {
         out->ch = shifted[key];
@@ -116,6 +129,7 @@ bool kbd_translate_extended(uint8_t code, struct kbd_key *out)
 
     out->ch = '\0';
     out->name = name;
+    out->ctrl = false;
     return true;
 }
 
@@ -139,6 +153,7 @@ bool kbd_poll(struct kbd_key *out)
 {
     static bool extended = false;
     static bool shift = false;
+    static bool ctrl = false;
 
     if (out == NULL || !byte_waiting()) {
         return false;
@@ -154,12 +169,25 @@ bool kbd_poll(struct kbd_key *out)
      * everything else in the extended set is dropped. */
     if (extended) {
         extended = false;
-        return kbd_translate_extended(code, out);
+        /* Before the release check inside the translator, because the right
+         * control key lives out here and has to be seen going up as well as
+         * coming down. */
+        ctrl = kbd_ctrl_after(code, ctrl);
+        if (!kbd_translate_extended(code, out)) {
+            return false;
+        }
+        out->ctrl = ctrl;
+        return true;
     }
 
     /* Shift has to be seen going down and coming back up, so this happens
      * before releases are discarded. */
     shift = kbd_shift_after(code, shift);
+    ctrl = kbd_ctrl_after(code, ctrl);
 
-    return kbd_translate(code, shift, out);
+    if (!kbd_translate(code, shift, out)) {
+        return false;
+    }
+    out->ctrl = ctrl;
+    return true;
 }

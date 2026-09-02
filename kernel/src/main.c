@@ -29,6 +29,9 @@
 
 #include "calc.h"
 #include "compositor.h"
+#include "cmd.h"
+#include "cpu.h"
+#include "desktop.h"
 #include "cursor.h"
 #include "fb.h"
 #include "fpu.h"
@@ -42,6 +45,7 @@
 #include "rect.h"
 #include "region.h"
 #include "surface.h"
+#include "term.h"
 #include "timer.h"
 #include "vars.h"
 #include "window.h"
@@ -84,19 +88,18 @@
 #define M4_CURSOR_START_X_DIVISOR 4
 #define M4_CURSOR_START_Y_DIVISOR 6
 
-/* M14 fixed backing stores. The desktop store supports the QEMU resolutions
- * used by this project; window stores exactly match their current objects.
- * These are explicit bounded pools until a real allocator exists. */
+/* M14 and M18 fixed backing stores. The desktop store supports the resolutions
+ * this project boots in, and every app gets one the same size, because the
+ * largest tile the layout can hand out is the whole workspace and an app must
+ * never be given a tile its store cannot hold. Explicit bounded pools until a
+ * real allocator exists. */
 #define DESKTOP_MAX_WIDTH  1920u
 #define DESKTOP_MAX_HEIGHT 1080u
-#define DEMO_X 40
-#define DEMO_Y 40
-#define DEMO_WIDTH 1180u
-#define DEMO_HEIGHT 720u
-#define SYSTEM_X 860
-#define SYSTEM_Y 80
-#define SYSTEM_WIDTH 300u
-#define SYSTEM_HEIGHT 180u
+/* One store shared by every tile, because tiles never overlap and so their
+ * areas together are never more than the workspace. Four private stores, each
+ * big enough to be the only window, cost four times this for a case that cannot
+ * happen, and zeroing them at boot took long enough to see on the screen. */
+#define TILE_ARENA_PIXELS  ((size_t)DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT)
 
 /* Limine scans the executable for these structures, so they must survive
  * optimisation and stay inside the section the linker script keeps. */
@@ -106,6 +109,15 @@ static volatile LIMINE_BASE_REVISION(3);
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_framebuffer_request framebuffer_request = {
     .id = LIMINE_FRAMEBUFFER_REQUEST,
+    .revision = 0,
+    .response = NULL,
+};
+
+/* Asked for so the terminal can answer MEM with what this machine actually has
+ * rather than a number written down when the code was compiled. */
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_memmap_request memmap_request = {
+    .id = LIMINE_MEMMAP_REQUEST,
     .revision = 0,
     .response = NULL,
 };
@@ -124,8 +136,6 @@ static uint32_t colour_background;
 static uint32_t colour_rect;
 static uint64_t sum_line_y;
 static uint32_t colour_triangle;
-static uint32_t colour_desktop;
-static uint32_t colour_system;
 static uint32_t colour_accent;
 static struct triangle_screen triangle_drawn;
 static bool triangle_showing;
@@ -142,15 +152,27 @@ static struct moving_rect rect_state;
 static struct rect_drag rect_drag_state;
 static bool mouse_left_down;
 static struct window_manager window_manager;
+static struct desktop desktop;
 static WindowId demo_window_id;
-static WindowId system_window_id;
 static struct surface desktop_surface;
+/* A copy of the Demo app's client view. Sharing the frame's pixels, so Demo
+ * draws in its own coordinates and the result is already inside its tile with
+ * no second buffer and no second blit. Refreshed on every relayout, because a
+ * new tile means a new view. */
 static struct surface demo_surface;
-static struct surface system_surface;
 static bool desktop_cursor_visible;
+static uint64_t uptime_seconds;
+static uint64_t timer_carried;
+static struct term terminal;
+static WindowId terminal_window_id;
+static char cpu_vendor_text[CPU_VENDOR_CAPACITY];
+static char cpu_brand_text[CPU_BRAND_CAPACITY];
+static uint64_t usable_memory_bytes;
+static uint64_t total_memory_bytes;
+static uint64_t memory_regions;
+static bool launcher_open;
 static uint32_t desktop_pixels[DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT];
-static uint32_t demo_pixels[DEMO_WIDTH * DEMO_HEIGHT];
-static uint32_t system_pixels[SYSTEM_WIDTH * SYSTEM_HEIGHT];
+static uint32_t tile_arena[TILE_ARENA_PIXELS];
 
 /* Stops the CPU for good. Interrupts are masked so nothing can wake us into
  * a triple fault, which is what an unhandled interrupt would cause here. */
@@ -227,24 +249,13 @@ static struct region cursor_region(int64_t x, int64_t y)
     return region_expand(region_make(x, y, CURSOR_WIDTH, CURSOR_HEIGHT), 1);
 }
 
-/* A rectangle drawn in Demo's own coordinates, said in desktop coordinates.
+/* A rectangle drawn in Demo's own coordinates, said in screen coordinates.
  *
- * Read from the window rather than from the constants it was created with, so
- * this keeps telling the truth once a layout manager starts moving windows. */
+ * Asked of the desktop rather than worked out here, because where Demo sits is
+ * the layout's business and it changes every time a window opens or closes. */
 static struct region demo_region(int64_t x, int64_t y, int64_t width, int64_t height)
 {
-    const struct window *window = window_get_const(&window_manager, demo_window_id);
-    if (window == NULL) {
-        return region_none();
-    }
-    const struct region local =
-        region_clip(region_make(x, y, width, height),
-                    (int64_t)window->geometry.width, (int64_t)window->geometry.height);
-    if (region_empty(&local)) {
-        return region_none();
-    }
-    return region_make(local.x + window->geometry.x, local.y + window->geometry.y,
-                       local.width, local.height);
+    return desktop_client_region(&desktop, demo_window_id, x, y, width, height);
 }
 
 /* Composes one rectangle of the desktop and writes only that rectangle out.
@@ -258,6 +269,13 @@ static struct region demo_region(int64_t x, int64_t y, int64_t width, int64_t he
  * what was underneath. Saving and restoring is faster still and is wrong the
  * moment a window repaints under the cursor, which would stamp stale content
  * wherever the cursor had been. */
+/* Declared here because composition has to put the launcher back over the
+ * windows it composed, and the menu itself belongs down with the rest of the
+ * click handling rather than up here with the drawing. */
+static struct region launcher_region(void);
+static void draw_launcher(void);
+static void close_launcher(void);
+
 static void compose_and_present(struct region region)
 {
     region = region_clip(region, (int64_t)fb_width(), (int64_t)fb_height());
@@ -265,8 +283,18 @@ static void compose_and_present(struct region region)
         return;
     }
     if (!compositor_compose_region(&window_manager, &desktop_surface,
-                                   colour_desktop, region)) {
+                                   desktop.theme.desktop, region)) {
         fail("could not compose the desktop");
+    }
+    /* After the windows, because the compositor clears what it composes and
+     * would wipe a bar drawn before it. Only when the region reaches one, so a
+     * cursor moving across the middle of the screen redraws neither. */
+    if (region_overlaps(region, desktop_top_bar_region(&desktop)) ||
+        region_overlaps(region, desktop_taskbar_region(&desktop))) {
+        desktop_draw_bars(&desktop, &desktop_surface, uptime_seconds);
+    }
+    if (launcher_open && region_overlaps(region, launcher_region())) {
+        draw_launcher();
     }
     if (desktop_cursor_visible &&
         region_overlaps(region, cursor_region(pointer_state.x, pointer_state.y))) {
@@ -284,14 +312,25 @@ static void compose_and_present(struct region region)
  * it: at 1280x800 that cleared 1,024,000 desktop pixels, blitted every window
  * back over them, and then wrote 1,024,000 pixels out across the graphics
  * adapter, for a cursor that had moved a few pixels. */
+/* Set while a relayout is in flight. Every tile has moved, so the small region
+ * each drawing call would present names a place nothing is any more, and the
+ * whole screen is presented once at the end instead. */
+static bool presenting_suppressed;
+
 static void present_region(struct region region)
 {
+    if (presenting_suppressed) {
+        return;
+    }
     counters.region_presents++;
     compose_and_present(region);
 }
 
 static void present_desktop(void)
 {
+    if (presenting_suppressed) {
+        return;
+    }
     counters.whole_presents++;
     compose_and_present(region_make(0, 0, (int64_t)fb_width(), (int64_t)fb_height()));
 }
@@ -317,9 +356,21 @@ static void log_counters(void)
 
 /* Replaces the key line. The whole line is cleared first, so a shorter
  * message cannot leave the tail of a longer one behind. */
+static char key_line_text[32] = M2_PROMPT;
+
 static void draw_key_line(const char *text)
 {
     const uint64_t height = FONT_HEIGHT * key_line_scale;
+
+    /* Kept, because a relayout redraws every line from scratch and the last key
+     * a person pressed is still the true answer to what the last key was. */
+    if (text != key_line_text) {
+        uint64_t i = 0;
+        for (; text[i] != '\0' && i + 1 < sizeof key_line_text; i++) {
+            key_line_text[i] = text[i];
+        }
+        key_line_text[i] = '\0';
+    }
 
     surface_fill_rect(&demo_surface, 0, (int64_t)key_line_y,
                       demo_surface.width, (uint32_t)height, colour_background);
@@ -606,6 +657,724 @@ static void handle_demo_event(const struct window_event *event)
     }
 }
 
+
+
+/* --- the Terminal app -------------------------------------------------------
+ *
+ * The thing that makes a machine feel like a computer rather than a picture of
+ * one is being able to type at it and have it answer. Every command reports
+ * something this kernel actually knows: the processor's own answer to CPUID,
+ * the memory map the bootloader handed over, the resolution Limine chose, the
+ * clock, and how many windows are open. Nothing invents a filesystem or a
+ * process list, because there are none. See M19 in docs/milestones.md.
+ */
+
+#define ME_OS_VERSION "0.19"
+
+/* Adds up what the bootloader said is usable, and what it saw altogether. */
+static void read_memory_map(void)
+{
+    const struct limine_memmap_response *map = memmap_request.response;
+    if (map == NULL) {
+        return;
+    }
+    for (uint64_t i = 0; i < map->entry_count; i++) {
+        const struct limine_memmap_entry *entry = map->entries[i];
+        if (entry == NULL) {
+            continue;
+        }
+        /* Usable and bootloader reclaimable both become memory this kernel
+         * could use. Counting only the first would understate a machine by the
+         * size of everything Limine is still holding. */
+        if (entry->type == LIMINE_MEMMAP_USABLE ||
+            entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE) {
+            usable_memory_bytes += entry->length;
+        }
+        /* Memory that is really there, whoever owns it. The framebuffer and the
+         * reserved ranges above it are address space rather than memory: adding
+         * those made a machine with half a gigabyte report twelve, because the
+         * hole between the top of RAM and the devices is enormous and empty. */
+        if (entry->type != LIMINE_MEMMAP_FRAMEBUFFER &&
+            entry->type != LIMINE_MEMMAP_RESERVED) {
+            total_memory_bytes += entry->length;
+        }
+        memory_regions++;
+    }
+}
+
+static struct surface *terminal_client(void)
+{
+    struct desktop_app *app =
+        desktop_app_at(&desktop, desktop_index_of(&desktop, terminal_window_id));
+    return app == NULL || app->hidden ? NULL : &app->client;
+}
+
+static void terminal_paint(void)
+{
+    struct surface *client = terminal_client();
+    if (client == NULL) {
+        return;
+    }
+    term_draw(&terminal, client, desktop.theme.chrome_text,
+              desktop.theme.window, desktop.theme.accent);
+    present_region(desktop_client_region(&desktop, terminal_window_id, 0, 0,
+                                         (int64_t)client->width,
+                                         (int64_t)client->height));
+}
+
+static void terminal_key(const struct window_event *event)
+{
+    char line[TERM_INPUT_MAX];
+    const bool enter = event->data.key.code == WINDOW_KEY_ENTER;
+    const bool backspace = event->data.key.code == WINDOW_KEY_BACKSPACE;
+
+    if (!term_key(&terminal, event->data.key.ch, enter, backspace,
+                  line, sizeof line)) {
+        terminal_paint();
+        return;
+    }
+
+    struct cmd_context context = {
+        .term = &terminal,
+        .uptime_seconds = uptime_seconds,
+        .screen_width = fb_width(),
+        .screen_height = fb_height(),
+        .usable_memory = usable_memory_bytes,
+        .total_memory = total_memory_bytes,
+        .windows_open = desktop.app_count,
+        .windows_visible = desktop_visible_count(&desktop),
+        .cpu_vendor = cpu_vendor_text,
+        .cpu_brand = cpu_brand_text,
+        .version = ME_OS_VERSION,
+    };
+    cmd_run(&context, line);
+    log_str("me-os: terminal ran ");
+    log_str(line);
+    log_str("\n");
+    terminal_paint();
+}
+
+static void drain_terminal_events(void)
+{
+    struct window_event event;
+    while (window_next_event(&window_manager, terminal_window_id, &event)) {
+        if (event.type == WINDOW_EVENT_KEY_DOWN) {
+            terminal_key(&event);
+        }
+    }
+}
+
+/* --- the ME OS Default desktop ---------------------------------------------
+ *
+ * Everything M1 to M12 drew now lives in one window called Demo, in that
+ * window's own coordinates, and the layout decides where that window is. Demo
+ * lays itself out inside whatever client area it was given, so the same code
+ * works whether it has a quarter of the screen or all of it.
+ *
+ * Three small windows sit beside it. They exist to prove the tiling, and they
+ * are deliberately tiny: inventing applications to fill a screen would be
+ * building something the milestone did not ask for.
+ */
+
+static uint64_t message_y;
+static uint64_t message_scale;
+static bool demo_announced;
+
+/* One line of the layout, so `tests/check_boot.py` can find a window without
+ * having to know the tiling arithmetic. It checks the rectangles against each
+ * other for overlap, so the kernel saying where it put something is checked
+ * rather than believed. */
+static void log_layout(void)
+{
+    for (size_t i = 0; i < desktop.app_count; i++) {
+        const struct desktop_app *app = desktop_app_at(&desktop, i);
+        const struct window *window =
+            window_get_const(&window_manager, app->id);
+        log_str("me-os: tile ");
+        log_str(app->title);
+        if (app->hidden || window == NULL) {
+            log_str(" hidden\n");
+            continue;
+        }
+        log_str(" at ");
+        log_dec((uint64_t)window->geometry.x);
+        log_str(",");
+        log_dec((uint64_t)window->geometry.y);
+        log_str(" size ");
+        log_dec(window->geometry.width);
+        log_str("x");
+        log_dec(window->geometry.height);
+        log_str(" client ");
+        log_dec((uint64_t)(window->geometry.x + desktop.layout.border));
+        log_str(",");
+        log_dec((uint64_t)(window->geometry.y + desktop.layout.border +
+                           SHELL_TITLE_HEIGHT));
+        log_str(" ");
+        log_dec(app->client.width);
+        log_str("x");
+        log_dec(app->client.height);
+        log_str(app->id == window_focused(&window_manager) ? " focused\n" : "\n");
+    }
+}
+
+/* Works out where everything in Demo goes, for the client area it has now.
+ *
+ * Called again after every relayout rather than once at boot, because a tile
+ * that changed size is a different amount of room and the message has to be
+ * centred in the room there is, not the room there was. */
+static void demo_layout(void)
+{
+    const uint64_t chars = str_len(M1_MESSAGE);
+    message_scale = pick_scale(demo_surface.width, chars);
+    const uint64_t text_h = FONT_HEIGHT * message_scale;
+    message_y = text_h < demo_surface.height
+        ? (demo_surface.height - text_h) / 2 : 0;
+
+    key_line_scale = message_scale;
+    key_line_y = message_y + text_h * 2;
+    if (key_line_y + FONT_HEIGHT * key_line_scale >= demo_surface.height) {
+        key_line_scale = 1;
+        key_line_y = message_y + text_h + FONT_HEIGHT;
+    }
+
+    sum_line_y = message_y > FONT_HEIGHT * key_line_scale * M6_LINE_GAP
+        ? message_y - FONT_HEIGHT * key_line_scale * M6_LINE_GAP
+        : 0;
+
+    const uint64_t rect_w = demo_surface.width / M3_RECT_WIDTH_DIVISOR;
+    const uint64_t rect_h = demo_surface.height / M3_RECT_HEIGHT_DIVISOR;
+    const uint64_t rect_x = rect_w < demo_surface.width
+        ? (demo_surface.width - rect_w) / 2 : 0;
+    uint64_t rect_y = key_line_y + FONT_HEIGHT * key_line_scale * 2;
+    if (rect_y + rect_h >= demo_surface.height) {
+        rect_y = message_y > rect_h * 2 ? message_y - rect_h * 2 : 0;
+    }
+
+    rect_state.width = rect_w;
+    rect_state.height = rect_h;
+    rect_state.x = (int64_t)rect_x;
+
+    /* M9/M10: the corridor the arrow keys may move it within. It starts below
+     * the key line and ends above the triangle, so steering cannot rub out any
+     * text or any part of the shape that turns. */
+    rect_min_y = (int64_t)(key_line_y + FONT_HEIGHT * key_line_scale + M9_CLEARANCE);
+    rect_max_y = (int64_t)(demo_surface.height * M12_CENTRE_Y_PARTS /
+                           M12_CENTRE_Y_DIVISOR)
+               - (int64_t)(demo_surface.height / M12_RADIUS_DIVISOR)
+               - (int64_t)rect_h - M9_CLEARANCE;
+    if (rect_max_y < rect_min_y) {
+        rect_max_y = rect_min_y;
+    }
+    /* Kept where it was when the corridor still holds it, so a relayout does
+     * not undo the steering somebody just did. Put back at the top when the new
+     * corridor cannot reach where it used to be. */
+    if (rect_state.y < rect_min_y || rect_state.y > rect_max_y) {
+        rect_state.y = rect_min_y;
+    }
+
+    if (fpu_ready()) {
+        triangle_init((int32_t)(demo_surface.width / M12_CENTRE_X_DIVISOR),
+                      (int32_t)(demo_surface.height * M12_CENTRE_Y_PARTS /
+                                M12_CENTRE_Y_DIVISOR),
+                      (int32_t)(demo_surface.height / M12_RADIUS_DIVISOR));
+    }
+
+    if (!demo_announced) {
+        log_str("me-os: rectangle may be steered between y ");
+        log_dec((uint64_t)rect_min_y);
+        log_str(" and ");
+        log_dec((uint64_t)rect_max_y);
+        log_str("\n");
+        log_str("me-os: drew the M3 rectangle ");
+        log_dec(rect_w);
+        log_str("x");
+        log_dec(rect_h);
+        log_str(" at ");
+        log_dec((uint64_t)rect_state.x);
+        log_str(",");
+        log_dec((uint64_t)rect_state.y);
+        log_str("\n");
+    }
+}
+
+/* Draws all of Demo into its client area. Nothing is presented from here: the
+ * caller has just moved every tile and presents the screen once at the end. */
+static void demo_repaint(void)
+{
+    surface_clear(&demo_surface, colour_background);
+    rect_showing = false;
+    triangle_showing = false;
+
+    surface_draw_string(&demo_surface, M1_MESSAGE,
+                        (int64_t)centred_x(str_len(M1_MESSAGE), message_scale),
+                        (int64_t)message_y, colour_text, (uint32_t)message_scale);
+    if (!demo_announced) {
+        log_stage("drew the M1 message");
+    }
+
+    draw_key_line(key_line_text);
+    draw_sum_line();
+    if (!demo_announced) {
+        log_stage("drew the M6 sum line");
+    }
+    draw_rect();
+    if (fpu_ready()) {
+        redraw_triangle();
+        if (!demo_announced) {
+            log_stage("floating point ready, drew the M12 triangle");
+        }
+    }
+    demo_announced = true;
+}
+
+/* One line of a labelled value, so the System Info window reads as a table
+ * rather than as a paragraph. */
+static void draw_field(struct surface *surface, int64_t y,
+                       const char *label, const char *value, uint32_t colour)
+{
+    surface_draw_string(surface, label, 8, y, desktop.theme.bar_dim, 1);
+    surface_draw_string(surface, value, 8 + 10 * FONT_WIDTH, y, colour, 1);
+}
+
+static void number_to_text(uint64_t value, char *out, uint64_t capacity)
+{
+    char digits[21];
+    uint64_t n = 0;
+    if (value == 0) {
+        digits[n++] = '0';
+    }
+    while (value > 0 && n < sizeof digits) {
+        digits[n++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    uint64_t written = 0;
+    while (n > 0 && written + 1 < capacity) {
+        out[written++] = digits[--n];
+    }
+    out[written] = '\0';
+}
+
+/* What this machine is, asked of the machine.
+ *
+ * Every line here comes from somewhere real: CPUID for the processor, the
+ * bootloader's memory map for the memory, Limine's answer for the resolution,
+ * and the clock for the uptime. A system information window that reported
+ * anything else would be a picture of one. */
+static void paint_system_info(struct surface *client)
+{
+    char text[64];
+    int64_t y = 8;
+    const int64_t line = FONT_HEIGHT + 6;
+
+    draw_field(client, y, "VENDOR",
+               cpu_vendor_text[0] != '\0' ? cpu_vendor_text : "UNKNOWN",
+               desktop.theme.chrome_text);
+    y += line;
+    if (cpu_brand_text[0] != '\0') {
+        surface_draw_string(client, cpu_brand_text, 8, y,
+                            desktop.theme.chrome_text, 1);
+        y += line;
+    }
+
+    number_to_text(fb_width(), text, sizeof text);
+    uint64_t at = 0;
+    while (text[at] != '\0') at++;
+    text[at++] = 'X';
+    number_to_text(fb_height(), text + at, sizeof text - at);
+    draw_field(client, y, "SCREEN", text, colour_accent);
+    y += line;
+
+    if (total_memory_bytes > 0) {
+        cmd_format_size(usable_memory_bytes, text, sizeof text);
+        draw_field(client, y, "USABLE", text, desktop.theme.chrome_text);
+        y += line;
+        cmd_format_size(total_memory_bytes, text, sizeof text);
+        draw_field(client, y, "MEMORY", text, desktop.theme.chrome_text);
+        y += line;
+        number_to_text(memory_regions, text, sizeof text);
+        draw_field(client, y, "REGIONS", text, desktop.theme.chrome_text);
+    } else {
+        draw_field(client, y, "MEMORY", "NOT REPORTED", desktop.theme.bar_dim);
+    }
+    y += line;
+
+    number_to_text(uptime_seconds / 60, text, sizeof text);
+    at = 0;
+    while (text[at] != '\0') at++;
+    text[at++] = 'M';
+    text[at++] = ' ';
+    number_to_text(uptime_seconds % 60, text + at, sizeof text - at);
+    at = 0;
+    while (text[at] != '\0') at++;
+    text[at++] = 'S';
+    text[at] = '\0';
+    draw_field(client, y, "UPTIME", text, desktop.theme.chrome_text);
+    y += line;
+
+    number_to_text(desktop_visible_count(&desktop), text, sizeof text);
+    draw_field(client, y, "TILES", text, desktop.theme.chrome_text);
+}
+
+static void paint_about(struct surface *client)
+{
+    static const char *const lines[] = {
+        "ME OS DEFAULT",
+        "",
+        "TILING FIRST. NORMAL WINDOWS DO NOT",
+        "OVERLAP AND DO NOT CHOOSE WHERE THEY",
+        "SIT. OPENING OR CLOSING ONE LAYS THE",
+        "REST OUT AGAIN.",
+        "",
+        "CTRL ARROWS   MOVE FOCUS",
+        "CTRL H        HIDE THIS WINDOW",
+        "CTRL S        SHOW EVERY WINDOW",
+        "CTRL N AND W  MOVE THE DIVIDER",
+        "",
+        "TYPE HELP IN THE TERMINAL.",
+    };
+    for (uint64_t i = 0; i < sizeof lines / sizeof lines[0]; i++) {
+        surface_draw_string(client, lines[i], 8,
+                            8 + (int64_t)i * (FONT_HEIGHT + 4),
+                            i == 0 ? colour_accent : desktop.theme.chrome_text, 1);
+    }
+}
+
+/* Paints one app's contents into the client area it has now. Demo is not here
+ * because it owns far more state than the others and lays itself out. */
+static void paint_app(size_t index)
+{
+    struct desktop_app *app = desktop_app_at(&desktop, index);
+    if (app == NULL || app->hidden) {
+        return;
+    }
+    if (index == 1) {
+        paint_system_info(&app->client);
+    } else if (index == 2) {
+        paint_about(&app->client);
+    } else if (index == 3) {
+        term_resize(&terminal, term_cols_for(app->client.width),
+                    term_rows_for(app->client.height));
+        term_draw(&terminal, &app->client, desktop.theme.chrome_text,
+                  desktop.theme.window, desktop.theme.accent);
+    }
+}
+
+static void paint_info_apps(void)
+{
+    for (size_t i = 1; i < desktop.app_count; i++) {
+        paint_app(i);
+    }
+}
+
+/* Recomputes the whole environment: tiles, frames, and every app's contents.
+ *
+ * One function, because those three always change together. A layout that moved
+ * the windows without repainting them would show each app's last drawing
+ * stretched across a tile it no longer fits. */
+static void relayout_desktop(void)
+{
+    if (!desktop_relayout(&desktop)) {
+        fail("the screen is too small to tile the visible windows");
+    }
+    struct desktop_app *demo =
+        desktop_app_at(&desktop, desktop_index_of(&desktop, demo_window_id));
+    if (demo == NULL) {
+        fail("Demo is not on the desktop");
+    }
+    demo_surface = demo->client;
+
+    presenting_suppressed = true;
+    desktop_paint_frames(&desktop);
+    paint_info_apps();
+    demo_layout();
+    demo_repaint();
+    presenting_suppressed = false;
+
+    present_desktop();
+    log_layout();
+}
+
+
+/* Repaints only the borders, for a focus change that moved no window.
+ *
+ * Tiles do not overlap, so focus changes nothing about where anything is. The
+ * only pixels that differ are four thin strips on two tiles and the marker on
+ * the taskbar, and repainting whole frames to change those would wipe every
+ * app's content on every key press. */
+static void refresh_focus(void)
+{
+    const WindowId focused = window_focused(&window_manager);
+    for (size_t i = 0; i < desktop.app_count; i++) {
+        struct desktop_app *app = desktop_app_at(&desktop, i);
+        if (app == NULL || app->hidden) {
+            continue;
+        }
+        shell_focus_border(&app->frame, &desktop.theme,
+                           app->id == focused, desktop.layout.border);
+    }
+    present_desktop();
+}
+
+/* The window manager's own keys.
+ *
+ * Returns true when the key was one of them, so it never reaches the focused
+ * app. A shortcut that also types into whatever has focus is a shortcut nobody
+ * can use, and the Demo window types every letter into a calculator.
+ *
+ * Control rather than Super, which is what a tiling desktop would normally use.
+ * The keyboard would decode Super perfectly well. Neither QEMU nor VirtualBox
+ * reliably delivers it, because the host's own window manager takes it first,
+ * and a shortcut that works here and silently does nothing on the next machine
+ * is worse than a different shortcut. See M18.
+ */
+static bool handle_shortcut(const struct kbd_key *key)
+{
+    if (launcher_open && key->name != NULL && same_name(key->name, "ESCAPE")) {
+        close_launcher();
+        return true;
+    }
+    if (!key->ctrl) {
+        return false;
+    }
+
+    if (key->name != NULL) {
+        const bool forward = same_name(key->name, "RIGHT") ||
+                             same_name(key->name, "DOWN");
+        const bool backward = same_name(key->name, "LEFT") ||
+                              same_name(key->name, "UP");
+        if (!forward && !backward) {
+            return false;
+        }
+        if (desktop_focus_step(&desktop, forward ? 1 : -1)) {
+            log_str("me-os: focus moved to window ");
+            log_dec(window_focused(&window_manager));
+            log_str("\n");
+            refresh_focus();
+        }
+        return true;
+    }
+
+    switch (key->ch) {
+    case 'H':
+        /* Out of the layout, still on the taskbar. The others grow into the
+         * space it leaves, which is the whole reason to hide one. */
+        if (desktop_set_hidden(&desktop, window_focused(&window_manager), true)) {
+            log_stage("window hidden, the layout reflowed");
+            relayout_desktop();
+        }
+        return true;
+
+    case 'S': {
+        bool any = false;
+        for (size_t i = 0; i < desktop.app_count; i++) {
+            const struct desktop_app *app = desktop_app_at(&desktop, i);
+            if (app != NULL && app->hidden &&
+                desktop_set_hidden(&desktop, app->id, false)) {
+                any = true;
+            }
+        }
+        if (any) {
+            log_stage("hidden windows shown, the layout reflowed");
+            relayout_desktop();
+        }
+        return true;
+    }
+
+    /* The divider between the two columns. This is what tile resizing is in a
+     * tiling desktop: a proportion, not a window dragged by its corner. */
+    case 'N':
+    case 'W': {
+        const int64_t step = key->ch == 'W' ? 5 : -5;
+        const int64_t before = desktop.layout.master_percent;
+        desktop.layout.master_percent += step;
+        if (desktop.layout.master_percent < 20) desktop.layout.master_percent = 20;
+        if (desktop.layout.master_percent > 80) desktop.layout.master_percent = 80;
+        if (desktop.layout.master_percent != before) {
+            log_str("me-os: master column now ");
+            log_dec((uint64_t)desktop.layout.master_percent);
+            log_str(" percent\n");
+            relayout_desktop();
+        }
+        return true;
+    }
+
+    default:
+        /* Any other key held with control is still the desktop's, not the
+         * app's. Letting it through would type a letter the person did not mean
+         * into whatever has focus. */
+        return true;
+    }
+}
+
+
+/* Where the launcher menu is drawn, when it is open. Above the taskbar and
+ * against the left edge, which is where the button that opens it is. */
+#define LAUNCHER_WIDTH  200
+#define LAUNCHER_ROW    22
+
+static struct region launcher_region(void)
+{
+    if (!launcher_open) {
+        return region_none();
+    }
+    const int64_t height = (int64_t)(desktop.app_count + 1) * LAUNCHER_ROW + 12;
+    return region_make(6,
+                       (int64_t)fb_height() - desktop.layout.bottom_bar - height,
+                       LAUNCHER_WIDTH, height);
+}
+
+/* The menu behind the ME OS mark. One entry per window, saying whether it is
+ * showing, plus a line about the machine. Small on purpose: a searchable
+ * launcher is a milestone of its own and this one has to be honest about what
+ * it can do. */
+static void draw_launcher(void)
+{
+    const struct region where = launcher_region();
+    if (region_empty(&where)) {
+        return;
+    }
+    surface_fill_rect(&desktop_surface, where.x, where.y,
+                      (uint32_t)where.width, (uint32_t)where.height,
+                      desktop.theme.chrome);
+    surface_fill_rect(&desktop_surface, where.x, where.y,
+                      (uint32_t)where.width, 2, desktop.theme.accent);
+
+    surface_draw_string(&desktop_surface, "ME OS " ME_OS_VERSION,
+                        where.x + 8, where.y + 8, desktop.theme.accent, 1);
+
+    for (size_t i = 0; i < desktop.app_count; i++) {
+        const struct desktop_app *app = desktop_app_at(&desktop, i);
+        const int64_t y = where.y + 8 + (int64_t)(i + 1) * LAUNCHER_ROW;
+        surface_draw_string(&desktop_surface, app->title, where.x + 8, y,
+                            app->hidden ? desktop.theme.bar_dim
+                                        : desktop.theme.bar_text, 1);
+        surface_draw_string(&desktop_surface, app->hidden ? "OPEN" : "SHOWN",
+                            where.x + LAUNCHER_WIDTH - 6 * FONT_WIDTH, y,
+                            app->hidden ? desktop.theme.accent
+                                        : desktop.theme.bar_dim, 1);
+    }
+}
+
+/* Which launcher entry a point is on, or DESKTOP_MAX_APPS for none. */
+static size_t launcher_entry_at(int64_t x, int64_t y)
+{
+    const struct region where = launcher_region();
+    if (region_empty(&where) || x < where.x || x >= where.x + where.width) {
+        return DESKTOP_MAX_APPS;
+    }
+    for (size_t i = 0; i < desktop.app_count; i++) {
+        const int64_t top = where.y + 8 + (int64_t)(i + 1) * LAUNCHER_ROW;
+        if (y >= top - 4 && y < top + FONT_HEIGHT + 4) {
+            return i;
+        }
+    }
+    return DESKTOP_MAX_APPS;
+}
+
+static void close_launcher(void)
+{
+    if (!launcher_open) {
+        return;
+    }
+    const struct region where = launcher_region();
+    launcher_open = false;
+    present_region(where);
+}
+
+/* A press on a tile's own title bar, in that window's coordinates.
+ *
+ * The buttons are found through the same two functions that drew them, so a
+ * click can never land somewhere a button was not painted. */
+static bool title_bar_press(WindowId id, int64_t local_x, int64_t local_y)
+{
+    const struct window *window = window_get_const(&window_manager, id);
+    if (window == NULL) {
+        return false;
+    }
+    const int64_t border = desktop.layout.border;
+    if (local_y < border || local_y >= border + SHELL_TITLE_HEIGHT) {
+        return false;
+    }
+
+    struct tile_area button;
+    if (shell_close_button(window->geometry.width, border, &button) &&
+        local_x >= button.x && local_x < button.x + button.width) {
+        /* Close hides the window and leaves it on the taskbar and in the
+         * launcher. Nothing here can free a window and build it again from
+         * nothing, and a close that lost an app for the rest of the run would
+         * be worse than one that puts it away. Said plainly in the log. */
+        if (desktop_set_hidden(&desktop, id, true)) {
+            log_stage("window closed to the taskbar, the layout reflowed");
+            relayout_desktop();
+        }
+        return true;
+    }
+    if (shell_hide_button(window->geometry.width, border, &button) &&
+        local_x >= button.x && local_x < button.x + button.width) {
+        if (desktop_set_hidden(&desktop, id, true)) {
+            log_stage("window hidden, the layout reflowed");
+            relayout_desktop();
+        }
+        return true;
+    }
+    return false;
+}
+
+/* Everything a press on the desktop itself can mean: the launcher, a taskbar
+ * button, or a tile's own title bar. Returns true when it was one of them, so
+ * the press is not also delivered to an app as an ordinary click. */
+static bool desktop_press(int64_t x, int64_t y)
+{
+    if (launcher_open) {
+        const size_t entry = launcher_entry_at(x, y);
+        close_launcher();
+        if (entry < desktop.app_count) {
+            const WindowId id = desktop_app_at(&desktop, entry)->id;
+            if (desktop_set_hidden(&desktop, id, false)) {
+                relayout_desktop();
+            }
+            window_focus(&window_manager, id, false);
+            refresh_focus();
+            return true;
+        }
+        /* A click anywhere else closes the menu and does nothing more, which is
+         * what a menu does everywhere else. */
+        return true;
+    }
+
+    const struct tile_area launcher =
+        shell_launcher_button((int64_t)fb_height(), desktop.layout.bottom_bar);
+    if (x >= launcher.x && x < launcher.x + launcher.width &&
+        y >= launcher.y && y < launcher.y + launcher.height) {
+        launcher_open = true;
+        present_desktop();
+        return true;
+    }
+
+    const size_t task = desktop_taskbar_hit(&desktop, x, y);
+    if (task < desktop.app_count) {
+        const WindowId id = desktop_app_at(&desktop, task)->id;
+        /* A hidden window comes back. A showing one takes focus. That is one
+         * button doing the obvious thing in both states rather than two. */
+        if (desktop_set_hidden(&desktop, id, false)) {
+            relayout_desktop();
+        }
+        window_focus(&window_manager, id, false);
+        refresh_focus();
+        return true;
+    }
+
+    const WindowId hit = window_hit_test(&window_manager, x, y);
+    if (hit != WINDOW_ID_NONE) {
+        const struct window *window = window_get_const(&window_manager, hit);
+        if (window != NULL &&
+            title_bar_press(hit, x - window->geometry.x, y - window->geometry.y)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void drain_demo_events(void)
 {
     struct window_event event;
@@ -640,150 +1409,93 @@ void kmain(void)
     log_dec(fb_height());
     log_str(" bpp 32\n");
 
-    /* M13 objects become the visible M14 Demo and System windows through the
-     * same stable-ID and attachment paths future callers will use. */
+    /* M13 window objects become the M18 tiles. Nothing is given a position
+     * here: the layout decides, and it decides again every time a window is
+     * hidden or shown. */
     window_manager_init(&window_manager);
-    const struct window_spec demo_window = {
-        .geometry = { .x = DEMO_X, .y = DEMO_Y,
-                      .width = DEMO_WIDTH, .height = DEMO_HEIGHT },
-        .title = "Demo",
-    };
-    const struct window_spec system_window = {
-        .geometry = { .x = SYSTEM_X, .y = SYSTEM_Y,
-                      .width = SYSTEM_WIDTH, .height = SYSTEM_HEIGHT },
-        .title = "System",
-    };
-    if (!window_create(&window_manager, &demo_window, &demo_window_id) ||
-        !window_create(&window_manager, &system_window, &system_window_id)) {
-        fail("could not create the M13 window objects");
-    }
-    log_str("me-os: window model ready, created IDs ");
-    log_dec(demo_window_id);
-    log_str(" and ");
-    log_dec(system_window_id);
-    log_str("\n");
-
-    colour_background = fb_rgb(0, 0, 0);
+    colour_background = fb_rgb(17, 20, 25);   /* the theme's window ground */
     colour_text = fb_rgb(255, 255, 255);
     colour_rect = fb_rgb(60, 170, 220);
     colour_cursor = fb_rgb(255, 214, 64);
     colour_triangle = fb_rgb(80, 220, 120);
-    colour_desktop = fb_rgb(18, 24, 38);
-    colour_system = fb_rgb(34, 46, 70);
-    colour_accent = fb_rgb(82, 190, 220);
+    colour_accent = fb_rgb(72, 214, 224);
+
+    if (!desktop_init(&desktop, &window_manager,
+                      (int64_t)fb_width(), (int64_t)fb_height(),
+                      tile_arena, TILE_ARENA_PIXELS, fb_rgb)) {
+        fail("could not start the ME OS desktop");
+    }
+
+    static const char *const titles[DESKTOP_MAX_APPS] = {
+        "DEMO", "SYSTEM INFO", "ABOUT ME OS", "TERMINAL",
+    };
+    for (size_t i = 0; i < DESKTOP_MAX_APPS; i++) {
+        if (desktop_add(&desktop, titles[i]) != i) {
+            fail("could not create the M18 windows");
+        }
+    }
+    demo_window_id = desktop_app_at(&desktop, 0)->id;
+    terminal_window_id = desktop_app_at(&desktop, 3)->id;
+
+    /* Asked of the machine before anything reports it. */
+    cpu_vendor(cpu_vendor_text, sizeof cpu_vendor_text);
+    cpu_brand(cpu_brand_text, sizeof cpu_brand_text);
+    read_memory_map();
+    term_init(&terminal, TERM_MAX_COLS, TERM_MAX_ROWS);
+    term_println(&terminal, "ME OS " ME_OS_VERSION);
+    term_println(&terminal, "TYPE HELP FOR A LIST OF COMMANDS.");
+    term_newline(&terminal);
+
+    /* Demo alone to begin with. ME OS Default is tiling first, and one window
+     * filling the workspace is what that layout does with one window: the tiling
+     * is in the rule, not in how many tiles happen to be on screen. The other
+     * three are on the taskbar and Ctrl+S brings them in, which is what makes
+     * the two, three and four tile layouts reachable without a launcher. */
+    for (size_t i = 1; i < desktop.app_count; i++) {
+        if (!desktop_set_hidden(&desktop, desktop_app_at(&desktop, i)->id, true)) {
+            fail("could not start with only Demo showing");
+        }
+    }
+
+    log_str("me-os: window model ready, created IDs ");
+    for (size_t i = 0; i < desktop.app_count; i++) {
+        if (i > 0) {
+            log_str(", ");
+        }
+        log_dec(desktop_app_at(&desktop, i)->id);
+    }
+    log_str("\n");
 
     if (fb_width() > DESKTOP_MAX_WIDTH || fb_height() > DESKTOP_MAX_HEIGHT ||
         !surface_init(&desktop_surface, desktop_pixels,
                       DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT,
-                      (uint32_t)fb_width(), (uint32_t)fb_height()) ||
-        !surface_init(&demo_surface, demo_pixels,
-                      DEMO_WIDTH * DEMO_HEIGHT, DEMO_WIDTH, DEMO_HEIGHT) ||
-        !surface_init(&system_surface, system_pixels,
-                      SYSTEM_WIDTH * SYSTEM_HEIGHT, SYSTEM_WIDTH, SYSTEM_HEIGHT) ||
-        !window_attach_surface(&window_manager, demo_window_id, &demo_surface) ||
-        !window_attach_surface(&window_manager, system_window_id, &system_surface)) {
+                      (uint32_t)fb_width(), (uint32_t)fb_height())) {
         fail("could not create the M14 software surfaces");
     }
     if (!window_focus(&window_manager, demo_window_id, false)) {
         fail("could not focus Demo for M15 input routing");
     }
 
-    surface_clear(&demo_surface, colour_background);
-    surface_draw_string(&demo_surface, "DEMO", 12, 12, colour_accent, 2);
-    surface_clear(&system_surface, colour_system);
-    surface_fill_rect(&system_surface, 0, 0, SYSTEM_WIDTH, 28, colour_accent);
-    surface_draw_string(&system_surface, "SYSTEM", 12, 8,
-                        colour_desktop, 1);
-    surface_draw_string(&system_surface, "WINDOW SURFACES", 20, 62,
-                        colour_accent, 1);
-    surface_draw_string(&system_surface, "OPAQUE COMPOSITOR", 20, 92,
-                        colour_accent, 1);
-    present_desktop();
-    log_stage("M14 compositor ready with two overlapping windows");
-
-    /* M1: the message, centred, exactly as the milestone specifies. */
-    const uint64_t chars = str_len(M1_MESSAGE);
-    const uint64_t scale = pick_scale(demo_surface.width, chars);
-    const uint64_t text_h = FONT_HEIGHT * scale;
-    const uint64_t y = text_h < demo_surface.height
-        ? (demo_surface.height - text_h) / 2 : 0;
-
-    surface_draw_string(&demo_surface, M1_MESSAGE,
-                        (int64_t)centred_x(chars, scale), (int64_t)y,
-                        colour_text, (uint32_t)scale);
-    present_desktop();
-    log_stage("drew the M1 message");
-
-    /* M2: one line below, left blank until a key arrives. */
-    key_line_scale = scale;
-    key_line_y = y + text_h * 2;
-    if (key_line_y + FONT_HEIGHT * key_line_scale >= demo_surface.height) {
-        key_line_scale = 1;
-        key_line_y = y + text_h + FONT_HEIGHT;
-    }
-    draw_key_line(M2_PROMPT);
-
-    /* M3: a filled rectangle below the key line, or above the message if the
-     * screen is too short for it to fit underneath. */
-    const uint64_t rect_w = demo_surface.width / M3_RECT_WIDTH_DIVISOR;
-    const uint64_t rect_h = demo_surface.height / M3_RECT_HEIGHT_DIVISOR;
-    const uint64_t rect_x = rect_w < demo_surface.width
-        ? (demo_surface.width - rect_w) / 2 : 0;
-    uint64_t rect_y = key_line_y + FONT_HEIGHT * key_line_scale * 2;
-
-    if (rect_y + rect_h >= demo_surface.height) {
-        rect_y = y > rect_h * 2 ? y - rect_h * 2 : 0;
-    }
-
-    rect_state.x = (int64_t)rect_x;
-    rect_state.y = (int64_t)rect_y;
-    rect_state.width = rect_w;
-    rect_state.height = rect_h;
+    /* The calculator has to exist before Demo paints, because the sum line is
+     * one of the things it paints. */
+    vars_reset(&vars_state);
+    calc_init(&calc_state, &vars_state);
     rect_state.speed = M5_RECT_SPEED;
     rect_state.direction = 1;
     rect_state.carried = 0;
 
-    /* M9/M10: the corridor the arrow keys may move it within. It starts below
-     * the key line and ends above the triangle, so steering cannot rub out any
-     * text or any part of the shape that turns. Nothing else lives in between.
-     * A wider range would need something that can repaint what was underneath,
-     * which no milestone has asked for yet. */
-    rect_min_y = (int64_t)(key_line_y + FONT_HEIGHT * key_line_scale + M9_CLEARANCE);
-    rect_max_y = (int64_t)(demo_surface.height * M12_CENTRE_Y_PARTS /
-                           M12_CENTRE_Y_DIVISOR)
-               - (int64_t)(demo_surface.height / M12_RADIUS_DIVISOR)
-               - (int64_t)rect_h - M9_CLEARANCE;
-    if (rect_max_y < rect_min_y) {
-        rect_max_y = rect_min_y;
+    /* M12: floating point before anything in geometry.c runs, because the
+     * processor starts with those instructions disabled. If it will not do SSE
+     * the kernel carries on without a triangle rather than faulting. */
+    if (!fpu_init()) {
+        log_stage("no SSE, running without the M12 triangle");
     }
-    /* Begin at the corridor's top so M9 can demonstrate three ordinary down
-     * steps before the next press deliberately demonstrates M10 wrapping. */
-    rect_state.y = rect_min_y;
 
-    draw_rect();
-    log_str("me-os: rectangle may be steered between y ");
-    log_dec((uint64_t)rect_min_y);
-    log_str(" and ");
-    log_dec((uint64_t)rect_max_y);
-    log_str("\n");
-    log_str("me-os: drew the M3 rectangle ");
-    log_dec(rect_w);
-    log_str("x");
-    log_dec(rect_h);
-    log_str(" at ");
-    log_dec((uint64_t)rect_state.x);
-    log_str(",");
-    log_dec((uint64_t)rect_state.y);
-    log_str("\n");
-
-    /* M6: the sum line, above the message, in the emptier half of the screen. */
-    sum_line_y = y > FONT_HEIGHT * key_line_scale * M6_LINE_GAP
-        ? y - FONT_HEIGHT * key_line_scale * M6_LINE_GAP
-        : 0;
-    vars_reset(&vars_state);
-    calc_init(&calc_state, &vars_state);
-    draw_sum_line();
-    log_stage("drew the M6 sum line");
+    /* Everything above only described the desktop. This is what puts it on the
+     * screen: tiles, frames, bars and every app's contents. */
+    relayout_desktop();
+    log_stage("M14 compositor ready with tiled window surfaces");
+    log_stage("M18 ME OS Default desktop ready, tiling first");
 
     kbd_init();
     log_stage("keyboard ready, waiting for keys");
@@ -850,7 +1562,7 @@ void kmain(void)
         struct kbd_key key;
         struct mouse_delta movement;
 
-        if (kbd_poll(&key)) {
+        if (kbd_poll(&key) && !handle_shortcut(&key)) {
             const struct window_event event = {
                 .type = WINDOW_EVENT_KEY_DOWN,
                 .data.key = {
@@ -859,13 +1571,54 @@ void kmain(void)
                 },
             };
             window_route_key(&window_manager, &event);
+            /* Both, because routing puts the event in the focused window's own
+             * queue and only that window's drain will find it. An app whose
+             * queue is empty does nothing, which is what an unfocused app
+             * should do with a key press. */
             drain_demo_events();
+            drain_terminal_events();
         }
 
         /* One reading of the clock, shared by everything that moves, so the
          * rectangle and the triangle cannot disagree about how much time has
          * passed. */
         const uint64_t elapsed = timer_poll();
+
+        /* The top bar's uptime. Counted from the same clock as everything else,
+         * and only redrawn when the second changes, so a bar that says the time
+         * does not become a reason to repaint the screen 60 times a second. */
+        timer_carried += elapsed;
+        if (timer_carried >= TIMER_HZ) {
+            uptime_seconds += timer_carried / TIMER_HZ;
+            timer_carried %= TIMER_HZ;
+            present_region(desktop_top_bar_region(&desktop));
+            /* System Info reports the uptime, so it is redrawn on the same tick
+             * as the bar that reports it. A window showing a clock that stopped
+             * at boot is worse than one with no clock in it. */
+            struct desktop_app *info = desktop_app_at(&desktop, 1);
+            if (info != NULL && !info->hidden) {
+                surface_fill_rect(&info->client, 0, 0, info->client.width,
+                                  info->client.height, desktop.theme.window);
+                paint_app(1);
+                present_region(desktop_client_region(
+                    &desktop, info->id, 0, 0, (int64_t)info->client.width,
+                    (int64_t)info->client.height));
+            }
+            /* Once a second, where the drifting rectangle has reached. The M5
+             * drift means its position is a function of how long the machine has
+             * been up, so a test that wants to click on it cannot work the place
+             * out in advance. This is the kernel saying where it is, which is
+             * something only the kernel knows. */
+            log_str("me-os: rectangle at ");
+            log_dec((uint64_t)rect_state.x);
+            log_str(",");
+            log_dec((uint64_t)rect_state.y);
+            log_str(" size ");
+            log_dec(rect_state.width);
+            log_str("x");
+            log_dec(rect_state.height);
+            log_str("\n");
+        }
 
         if (rect_advance(&rect_state, elapsed, TIMER_HZ, demo_surface.width)) {
             draw_rect();
@@ -891,6 +1644,7 @@ void kmain(void)
         bool any_packet = false;
         bool cursor_moved = false;
         bool focus_changed = false;
+        bool handled_by_desktop = false;
         const struct region cursor_was =
             cursor_region(pointer_state.x, pointer_state.y);
 
@@ -911,15 +1665,23 @@ void kmain(void)
             if (movement.middle) buttons |= WINDOW_MOUSE_MIDDLE;
 
             if (pressed) {
-                const WindowId before = window_focused(&window_manager);
-                const WindowId target = window_route_pointer(
-                    &window_manager, WINDOW_EVENT_MOUSE_DOWN,
-                    pointer_state.x, pointer_state.y, buttons);
-                if (before != window_focused(&window_manager)) {
-                    focus_changed = true;
-                    log_str("me-os: focus moved to window ");
-                    log_dec(target);
-                    log_str("\n");
+                /* The desktop looks first: the launcher, the taskbar and a
+                 * tile's own title bar belong to the window manager, not to the
+                 * app inside the tile. Anything it does not claim goes on to the
+                 * window under the pointer as an ordinary click. */
+                if (desktop_press(pointer_state.x, pointer_state.y)) {
+                    handled_by_desktop = true;
+                } else {
+                    const WindowId before = window_focused(&window_manager);
+                    const WindowId target = window_route_pointer(
+                        &window_manager, WINDOW_EVENT_MOUSE_DOWN,
+                        pointer_state.x, pointer_state.y, buttons);
+                    if (before != window_focused(&window_manager)) {
+                        focus_changed = true;
+                        log_str("me-os: focus moved to window ");
+                        log_dec(target);
+                        log_str("\n");
+                    }
                 }
             }
             if (this_packet_moved) {
@@ -939,8 +1701,9 @@ void kmain(void)
              * rectangle and that repaint has to be underneath the cursor rather
              * than composed over it afterwards. */
             drain_demo_events();
+            drain_terminal_events();
 
-            if (focus_changed) {
+            if (focus_changed || handled_by_desktop) {
                 /* Raising a window reorders everything it touches, and the
                  * cheap answer to which pixels changed is all of them. One
                  * click is rare enough to pay for. */

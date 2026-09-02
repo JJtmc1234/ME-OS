@@ -100,17 +100,34 @@ RECT_COLOUR = (60, 170, 220)
 RECT_WIDTH_DIVISOR = 4
 RECT_HEIGHT_DIVISOR = 14
 
-DEMO_X = 40
-DEMO_Y = 40
-DEMO_WIDTH = 1180
-DEMO_HEIGHT = 720
-SYSTEM_X = 860
-SYSTEM_Y = 80
-SYSTEM_WIDTH = 300
-SYSTEM_HEIGHT = 180
-DESKTOP_COLOUR = (18, 24, 38)
-SYSTEM_COLOUR = (34, 46, 70)
-ACCENT_COLOUR = (82, 190, 220)
+# Demo's client area, filled in from the kernel's own log by
+# `load_demo_geometry`. Not written down here, because the tiling layout decides
+# it and a second copy of that arithmetic in this file would drift from the real
+# one. Everything inside Demo is reported relative to its client area, so the
+# origin is zero rather than wherever the layout put the window.
+DEMO_X = 0
+DEMO_Y = 0
+DEMO_WIDTH = 0
+DEMO_HEIGHT = 0
+# M18 theme. Every colour the desktop paints, so a pixel that is none of them
+# inside a window is a real fault rather than a colour nobody listed.
+# Mirrored from kernel/src/tile.c. The layout itself is read back from the
+# kernel's log rather than recomputed, so these are only used to say which strip
+# of the screen a bar owns.
+TOP_BAR_HEIGHT = 28
+TASKBAR_HEIGHT = 34
+SCREEN_HEIGHT = 800
+
+DESKTOP_COLOUR = (12, 14, 18)
+BAR_COLOUR = (20, 23, 29)
+ACCENT_COLOUR = (72, 214, 224)
+CHROME_COLOUR = (28, 32, 40)
+CHROME_TEXT_COLOUR = (198, 206, 218)
+BAR_TEXT_COLOUR = (214, 220, 230)
+BAR_DIM_COLOUR = (112, 122, 138)
+BORDER_COLOUR = (44, 50, 60)
+# What a window's client area starts as, and what Demo erases with.
+WINDOW_COLOUR = (17, 20, 25)
 
 CURSOR_COLOUR = (255, 214, 64)
 
@@ -235,79 +252,250 @@ def read_ppm(path: Path) -> tuple[int, int, bytes]:
     return width, height, pixels
 
 
-def check_window_layout(path: Path) -> str:
-    """M14: prove the desktop and both opaque surfaces occupy their own regions."""
-    width, height, pixels = read_ppm(path)
 
-    def colour_at(x: int, y: int) -> tuple[int, int, int]:
-        if not (0 <= x < width and 0 <= y < height):
-            raise CheckFailed(f"{path.name}: M14 sample ({x}, {y}) is off screen")
+class Tile:
+    """Where the kernel says it put one window, read back from its own log."""
+
+    def __init__(self, title, x, y, width, height,
+                 client_x, client_y, client_width, client_height, focused):
+        self.title = title
+        self.x, self.y = x, y
+        self.width, self.height = width, height
+        self.client_x, self.client_y = client_x, client_y
+        self.client_width, self.client_height = client_width, client_height
+        self.focused = focused
+
+    def contains_client(self, x, y):
+        return (self.client_x <= x < self.client_x + self.client_width and
+                self.client_y <= y < self.client_y + self.client_height)
+
+
+def parse_layouts() -> list[list[Tile]]:
+    """Every layout the kernel reported, oldest first.
+
+    A run is a block of consecutive tile lines. A repeated title starts a new
+    one, because the kernel prints every window each time it lays out.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    runs: list[list[Tile]] = []
+    current: list[Tile] = []
+    seen: set[str] = set()
+
+    def close():
+        nonlocal current, seen
+        if current:
+            runs.append(current)
+        current, seen = [], set()
+
+    for line in text.splitlines():
+        if not line.startswith("me-os: tile "):
+            close()
+            continue
+        body = line[len("me-os: tile "):]
+        title = body.split(" at ")[0].split(" hidden")[0].strip()
+        if title in seen:
+            close()
+        seen.add(title)
+        if body.endswith(" hidden"):
+            continue
+        try:
+            head, rest = body.split(" at ", 1)
+            where, rest = rest.split(" size ", 1)
+            size, rest = rest.split(" client ", 1)
+            client_where, rest = rest.split(" ", 1)
+            client_size = rest.split()[0]
+            x, y = (int(v) for v in where.split(","))
+            width, height = (int(v) for v in size.split("x"))
+            cx, cy = (int(v) for v in client_where.split(","))
+            cw, ch = (int(v) for v in client_size.split("x"))
+        except (ValueError, IndexError) as exc:
+            raise CheckFailed(f"could not read the layout line {line!r}: {exc}")
+        current.append(Tile(head.strip(), x, y, width, height, cx, cy, cw, ch,
+                            rest.strip().endswith("focused")))
+    close()
+
+    runs = [run for run in runs if run]
+    if not runs:
+        raise CheckFailed("the kernel never reported a layout")
+    return runs
+
+
+def read_layout(which: int = 0) -> dict[str, Tile]:
+    """The last layout the kernel reported, one entry per window.
+
+    Read from the log rather than recomputed here, so this file does not hold a
+    second copy of the tiling arithmetic that could drift from the real one. The
+    rectangles are then checked against each other for overlap, so what the
+    kernel says is verified rather than believed.
+    """
+    return {tile.title: tile for tile in parse_layouts()[which]}
+
+
+def demo_tile() -> Tile:
+    """Where Demo was during the M1 to M12 captures, which is the first layout.
+
+    Those captures are all taken while Demo has the workspace to itself. The
+    later ones, after the other windows are brought in, are checked by
+    `check_tiles_on_screen` against the layout that was current for them.
+    """
+    tiles = read_layout(0)
+    if "DEMO" not in tiles:
+        raise CheckFailed("the kernel never reported where it put the Demo window")
+    return tiles["DEMO"]
+
+
+def load_demo_geometry() -> None:
+    """Reads Demo's client size out of the layout the kernel reported."""
+    global DEMO_WIDTH, DEMO_HEIGHT
+    tile = demo_tile()
+    DEMO_WIDTH, DEMO_HEIGHT = tile.client_width, tile.client_height
+
+
+def check_tiling() -> list[str]:
+    """M17 and M18, against every layout the kernel reported, not only the last.
+
+    Every one of them, because a reflow that produced overlapping tiles would
+    otherwise hide behind a tidy final state.
+    """
+    runs = parse_layouts()
+    counts = set()
+    for run in runs:
+        counts.add(len(run))
+        for i, a in enumerate(run):
+            if a.y < TOP_BAR_HEIGHT:
+                raise CheckFailed(
+                    f"the tile {a.title} at y {a.y} reaches into the top bar")
+            if a.y + a.height > SCREEN_HEIGHT - TASKBAR_HEIGHT:
+                raise CheckFailed(
+                    f"the tile {a.title} ends at y {a.y + a.height}, "
+                    f"inside the taskbar")
+            for b in run[i + 1:]:
+                if (a.x < b.x + b.width and b.x < a.x + a.width and
+                        a.y < b.y + b.height and b.y < a.y + a.height):
+                    raise CheckFailed(
+                        f"the tiles {a.title} and {b.title} overlap: "
+                        f"{a.x},{a.y} {a.width}x{a.height} against "
+                        f"{b.x},{b.y} {b.width}x{b.height}")
+
+    if len(counts) < 3:
+        raise CheckFailed(
+            f"the run only ever showed {sorted(counts)} windows at once, so it "
+            f"did not demonstrate that opening and closing windows reflows the "
+            f"rest")
+
+    return [
+        f"M17 tiling: {len(runs)} layouts across "
+        f"{', '.join(str(c) for c in sorted(counts))} visible windows, none "
+        f"overlapping and none reaching into a bar"
+    ]
+
+
+def check_focus_moved() -> list[str]:
+    """M18: focus really moved between windows, not merely once and back.
+
+    The window it lands on depends on what is showing at the time, so the
+    numbers are not written down here. What matters is that more than one window
+    held focus during the run.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    landed = {line.rsplit(" ", 1)[-1].strip()
+              for line in text.splitlines()
+              if "focus moved to window " in line}
+    if len(landed) < 2:
+        raise CheckFailed(
+            f"focus only ever landed on {landed or 'nothing'}, so nothing showed "
+            f"that it moves between tiles")
+    return [f"M18 focus: it moved between windows {', '.join(sorted(landed))} "
+            f"during the run"]
+
+
+def check_terminal() -> list[str]:
+    """M19: the terminal answered with things the machine had to look up.
+
+    Checked from the log rather than by reading pixels, because what is being
+    checked is that the command ran and reported real values. That the answer
+    reached the screen is `check_tiles_on_screen`'s job.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    ran = [line.split("terminal ran ", 1)[1].strip()
+           for line in text.splitlines() if "terminal ran " in line]
+    if len(ran) < 2:
+        raise CheckFailed(
+            f"the terminal only ran {ran}, so it did not demonstrate a shell")
+    return [f"M19 terminal: ran {', '.join(ran)} and answered each one"]
+
+
+def check_tiles_on_screen(path: Path) -> list[str]:
+    """The tiles really are on the screen where the kernel said it put them.
+
+    The log is the kernel's own account of itself, so it is checked against
+    pixels: the middle of every tile has to be window content, and the gap
+    between two tiles has to be bare desktop. A layout that was correct in the
+    log and not on the screen would pass everything above this.
+    """
+    width, height, pixels = read_ppm(path)
+    tiles = list(read_layout(-1).values())
+    if len(tiles) < 2:
+        raise CheckFailed(
+            f"{path.name} was captured with {len(tiles)} windows showing, so it "
+            f"cannot demonstrate a gap between two tiles")
+
+    def colour_at(x, y):
         index = (y * width + x) * 3
         return pixels[index], pixels[index + 1], pixels[index + 2]
 
-    samples = (
-        ((0, 0), DESKTOP_COLOUR, "desktop corner"),
-        ((DEMO_X - 1, DEMO_Y + 100), DESKTOP_COLOUR, "desktop beside Demo"),
-        ((DEMO_X + 10, DEMO_Y + 100), (0, 0, 0), "Demo local background"),
-        ((SYSTEM_X, SYSTEM_Y), ACCENT_COLOUR, "System accent bar"),
-        ((SYSTEM_X + 10, SYSTEM_Y + 40), SYSTEM_COLOUR, "System body"),
-    )
-    for point, expected, label in samples:
-        actual = colour_at(*point)
-        if actual != expected:
+    for tile in tiles:
+        middle = colour_at(tile.client_x + tile.client_width // 2,
+                           tile.client_y + tile.client_height // 2)
+        if middle == DESKTOP_COLOUR:
             raise CheckFailed(
-                f"{path.name}: {label} at {point} is rgb{actual}, expected rgb{expected}"
-            )
-
-    if not (DEMO_X < SYSTEM_X < DEMO_X + DEMO_WIDTH and
-            DEMO_Y < SYSTEM_Y < DEMO_Y + DEMO_HEIGHT):
-        raise CheckFailed("M14 fixture no longer places System over Demo")
-
-    return (
-        f"M14 compositor: desktop background, Demo {DEMO_WIDTH}x{DEMO_HEIGHT} "
-        f"at ({DEMO_X}, {DEMO_Y}), and System {SYSTEM_WIDTH}x{SYSTEM_HEIGHT} "
-        f"opaque above it at ({SYSTEM_X}, {SYSTEM_Y})"
-    )
-
-
-def check_focus_routing(system_path: Path, demo_path: Path) -> str:
-    """M15: clicks focus the hit window and raise it deterministically."""
-    system_width, system_height, system_pixels = read_ppm(system_path)
-    demo_width, demo_height, demo_pixels = read_ppm(demo_path)
-    if (system_width, system_height) != (demo_width, demo_height):
-        raise CheckFailed("M15 focus captures have different framebuffer sizes")
-
-    def colour_at(pixels: bytes, x: int, y: int) -> tuple[int, int, int]:
-        index = (y * system_width + x) * 3
-        return pixels[index], pixels[index + 1], pixels[index + 2]
-
-    samples = (
-        (SYSTEM_X, SYSTEM_Y, ACCENT_COLOUR, "System accent"),
-        (SYSTEM_X + 10, SYSTEM_Y + 40, SYSTEM_COLOUR, "System body"),
-    )
-    for x, y, system_expected, label in samples:
-        system_actual = colour_at(system_pixels, x, y)
-        if system_actual != system_expected:
+                f"{path.name}: the middle of {tile.title} is bare desktop, so "
+                f"the window is not where the log says it is")
+        corner = colour_at(tile.x, tile.y)
+        if corner not in (ACCENT_COLOUR, BORDER_COLOUR):
             raise CheckFailed(
-                f"{system_path.name}: {label} at ({x}, {y}) is "
-                f"rgb{system_actual}, expected rgb{system_expected}"
-            )
-        demo_actual = colour_at(demo_pixels, x, y)
-        if demo_actual != (0, 0, 0):
-            raise CheckFailed(
-                f"{demo_path.name}: Demo did not cover {label} after being raised; "
-                f"pixel ({x}, {y}) is rgb{demo_actual}"
-            )
+                f"{path.name}: {tile.title} has no border at its corner "
+                f"({tile.x}, {tile.y}), found rgb{corner}")
 
-    return (
-        "M15 focus routing: clicking System kept it visible on top; clicking "
-        "Demo focused and raised Demo over both sampled System regions"
-    )
+    focused = [t for t in tiles if colour_at(t.x, t.y) == ACCENT_COLOUR]
+    if len(focused) != 1:
+        raise CheckFailed(
+            f"{path.name}: {len(focused)} tiles carry the accent border, and "
+            f"exactly one window has focus")
+
+    # The gap between the two leftmost tiles in the same column, which is bare
+    # desktop by construction and the clearest evidence they do not overlap.
+    ordered = sorted(tiles, key=lambda t: (t.x, t.y))
+    a, b = ordered[0], ordered[1]
+    if a.x == b.x and b.y > a.y + a.height:
+        gap = colour_at(a.x + a.width // 2, (a.y + a.height + b.y) // 2)
+    else:
+        gap = colour_at((a.x + a.width + b.x) // 2, a.y + a.height // 2)
+    if gap != DESKTOP_COLOUR:
+        raise CheckFailed(
+            f"{path.name}: the gap between {a.title} and {b.title} is rgb{gap}, "
+            f"not the desktop showing through")
+
+    return [
+        f"M18 desktop: {len(tiles)} tiles on screen where the log said, one "
+        f"accent border, and bare desktop in the gap between them"
+    ]
 
 
 def read_screen(path: Path):
-    """Sort pixels drawn by the Demo app while accepting compositor colours."""
+    """Sort the pixels Demo drew, looking only inside Demo's own window.
+
+    Since M18 the screen is a desktop: two bars, a frame around every tile and
+    up to three other windows. Demo's drawing lives inside Demo's client area
+    and nowhere else, so that is where these checks look, and everything is
+    reported in Demo's own coordinates. Where Demo is comes from the kernel's
+    log, so this file does not hold a second copy of the tiling arithmetic.
+
+    The cursor is the exception. It is a desktop overlay rather than part of any
+    window, so it is collected from the whole screen in screen coordinates.
+    """
     width, height, pixels = read_ppm(path)
+    tile = demo_tile()
     rows: dict[int, set[int]] = {}
     rect: set[tuple[int, int]] = set()
     cursor: set[tuple[int, int]] = set()
@@ -315,28 +503,33 @@ def read_screen(path: Path):
 
     for index in range(0, len(pixels), 3):
         colour = (pixels[index], pixels[index + 1], pixels[index + 2])
-        if colour == (0, 0, 0):
-            continue
         pixel = index // 3
         x, y = pixel % width, pixel // width
-        if colour == (255, 255, 255):
-            rows.setdefault(y, set()).add(x)
-        elif colour == RECT_COLOUR:
-            rect.add((x, y))
-        elif colour == CURSOR_COLOUR:
+
+        if colour == CURSOR_COLOUR:
             cursor.add((x, y))
-        elif colour == TRIANGLE_COLOUR:
-            triangle.add((x, y))
-        elif colour in (DESKTOP_COLOUR, SYSTEM_COLOUR, ACCENT_COLOUR):
             continue
+        if not tile.contains_client(x, y):
+            continue
+
+        local = (x - tile.client_x, y - tile.client_y)
+        if colour in (WINDOW_COLOUR, (0, 0, 0)):
+            continue
+        if colour == (255, 255, 255):
+            rows.setdefault(local[1], set()).add(local[0])
+        elif colour == RECT_COLOUR:
+            rect.add(local)
+        elif colour == TRIANGLE_COLOUR:
+            triangle.add(local)
         else:
             raise CheckFailed(
-                f"{path.name}: pixel at ({x}, {y}) is unexpected rgb{colour}"
+                f"{path.name}: pixel at ({x}, {y}), inside the Demo window, "
+                f"is unexpected rgb{colour}"
             )
 
     if not rows:
-        raise CheckFailed(f"{path.name}: no white text on the screen")
-    return width, height, rows, rect, cursor, triangle
+        raise CheckFailed(f"{path.name}: no white text inside the Demo window")
+    return tile.client_width, tile.client_height, rows, rect, cursor, triangle
 
 
 def find_bands(path: Path):
@@ -529,10 +722,18 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
     if key_line.top <= message.bottom:
         raise CheckFailed(f"{path.name}: the key line is not below the M1 message")
     notes.append("  M1 message centred, key line below it")
-    notes.append("  " + check_rectangle(rect, width, height, key_line, path.name, cursor))
+    # The cursor is collected in screen coordinates, because it is a desktop
+    # overlay rather than part of any window, and the rectangle is in Demo's
+    # own. The hole the cursor leaves in the rectangle can only be recognised
+    # when both are said in the same coordinates.
+    tile = demo_tile()
+    cursor_local = {(x - tile.client_x, y - tile.client_y) for x, y in cursor}
+    notes.append("  " + check_rectangle(rect, width, height, key_line, path.name,
+                                        cursor_local))
 
     left, top, pixels = cursor_corner(cursor, path.name)
-    if left >= width or top >= height:
+    screen_width, screen_height, _ = read_ppm(path)
+    if left >= screen_width or top >= screen_height:
         raise CheckFailed(f"{path.name}: the cursor is outside the screen")
     notes.append(f"  M4 cursor: {pixels} pixels, top left ({left}, {top})")
 
@@ -543,15 +744,17 @@ def check_screen(path: Path, key_line_text: str, sum_line_text: str = M6_PROMPT)
 
     rect_left = min(x for x, _ in rect)
     RECTANGLES.append((path.name, rect_left, min(y for _, y in rect)))
-    return notes, (left, top, pixels), (width, height), rect_left, sum_line.ink
+    return (notes, (left, top, pixels), (width, height), rect_left, sum_line.ink,
+            (screen_width, screen_height))
 
 
 def check_log() -> list[str]:
     notes = []
     expected = (
         "kernel entered",
-        "window model ready, created IDs 1 and 2",
-        "M14 compositor ready with two overlapping windows",
+        "window model ready, created IDs 1, 2, 3, 4",
+        "M14 compositor ready with tiled window surfaces",
+        "M18 ME OS Default desktop ready, tiling first",
         "drew the M1 message",
         "drew the M3 rectangle",
         "keyboard ready",
@@ -564,8 +767,11 @@ def check_log() -> list[str]:
         "rectangle drag started",
         "rectangle dragged to",
         "rectangle drag ended",
-        "focus moved to window 2",
-        "focus moved to window 1",
+        "focus moved to window ",
+        "hidden windows shown, the layout reflowed",
+        "window hidden, the layout reflowed",
+        "terminal ran VER",
+        "terminal ran CPU",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -868,28 +1074,28 @@ def check_rotation() -> list[str]:
 
 def main() -> int:
     try:
-        notes, boot_cursor, size, rect_boot, sum_boot = check_screen(
+        load_demo_geometry()
+        notes, boot_cursor, size, rect_boot, sum_boot, screen = check_screen(
             SCREEN_BOOT, M2_PROMPT)
-        notes.append("  " + check_window_layout(SCREEN_BOOT))
-        key_notes, key_cursor, _, rect_key, _ = check_screen(
+        key_notes, key_cursor, _, rect_key, _, _ = check_screen(
             SCREEN_KEY, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
-        mouse_notes, moved_cursor, _, rect_mouse, _ = check_screen(
+        mouse_notes, moved_cursor, _, rect_mouse, _, _ = check_screen(
             SCREEN_MOUSE, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
-        clamp_notes, clamped_cursor, _, rect_clamp, sum_clamp = check_screen(
+        clamp_notes, clamped_cursor, _, rect_clamp, sum_clamp, _ = check_screen(
             SCREEN_CLAMP, M2_AFTER_KEY, M8_KEY_ON_SUM_LINE)
-        typed_notes, _, _, rect_sum, sum_typed = check_screen(
+        typed_notes, _, _, rect_sum, sum_typed, _ = check_screen(
             SCREEN_SUM, M6_AFTER_ENTER, M6_SUM)
-        power_notes, _, _, rect_power, sum_power = check_screen(
+        power_notes, _, _, rect_power, sum_power, _ = check_screen(
             SCREEN_POWER, M6_AFTER_ENTER, M6_POWER)
-        true_notes, _, _, rect_true, sum_true = check_screen(
+        true_notes, _, _, rect_true, sum_true, _ = check_screen(
             SCREEN_TRUE, M6_AFTER_ENTER, M7_TRUE)
-        false_notes, _, _, rect_false, sum_false = check_screen(
+        false_notes, _, _, rect_false, sum_false, _ = check_screen(
             SCREEN_FALSE, M6_AFTER_ENTER, M7_FALSE)
-        assign_notes, _, _, rect_assign, sum_assign = check_screen(
+        assign_notes, _, _, rect_assign, sum_assign, _ = check_screen(
             SCREEN_ASSIGN, M6_AFTER_ENTER, M8_ASSIGN)
-        var_notes, _, _, rect_var, sum_var = check_screen(
+        var_notes, _, _, rect_var, sum_var, _ = check_screen(
             SCREEN_VAR, M6_AFTER_ENTER, M8_VAR)
-        varif_notes, _, _, rect_varif, sum_varif = check_screen(
+        varif_notes, _, _, rect_varif, sum_varif, _ = check_screen(
             SCREEN_VARIF, M6_AFTER_ENTER, M8_VARIF)
         notes += (key_notes + mouse_notes + clamp_notes + typed_notes + power_notes
                   + true_notes + false_notes + assign_notes + var_notes
@@ -942,49 +1148,59 @@ def main() -> int:
         if key_cursor[:2] != boot_cursor[:2]:
             raise CheckFailed("the cursor moved on its own before the mouse was touched")
 
-        notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, size)
+        notes += check_cursor_movement(boot_cursor, moved_cursor, clamped_cursor, screen)
         notes += check_rectangle_movement(
             [rect_boot, rect_key, rect_mouse, rect_clamp, rect_sum, rect_power,
              rect_true, rect_false, rect_assign, rect_var, rect_varif], size)
-        steer_down_notes, _, _, rect_steer_down, _ = check_screen(
+        steer_down_notes, _, _, rect_steer_down, _, _ = check_screen(
             SCREEN_STEER_DOWN, M2_AFTER_ARROW_DOWN, M8_VARIF)
-        steer_left_notes, _, _, rect_steer_left, _ = check_screen(
+        steer_left_notes, _, _, rect_steer_left, _, _ = check_screen(
             SCREEN_STEER_LEFT, M2_AFTER_ARROW_LEFT, M8_VARIF)
         notes += steer_down_notes + steer_left_notes
 
         notes += check_steering()
-        wrap_down_notes, _, _, _, _ = check_screen(
+        wrap_down_notes, _, _, _, _, _ = check_screen(
             SCREEN_WRAP_DOWN, M2_AFTER_ARROW_DOWN, M8_VARIF)
-        wrap_left_notes, _, _, _, _ = check_screen(
+        wrap_left_notes, _, _, _, _, _ = check_screen(
             SCREEN_WRAP_LEFT, M2_AFTER_ARROW_LEFT, M8_VARIF)
         notes += wrap_down_notes + wrap_left_notes
         notes += check_wrapping(size)
-        drag_ready_notes, drag_ready_cursor, _, _, _ = check_screen(
+        drag_ready_notes, drag_ready_cursor, _, _, _, _ = check_screen(
             SCREEN_DRAG_READY, M2_AFTER_ARROW_LEFT, M8_VARIF)
-        drag_held_notes, drag_held_cursor, _, _, _ = check_screen(
+        drag_held_notes, drag_held_cursor, _, _, _, _ = check_screen(
             SCREEN_DRAG_HELD, M2_AFTER_ARROW_LEFT, M8_VARIF)
-        drag_release_notes, drag_release_cursor, _, _, _ = check_screen(
+        drag_release_notes, drag_release_cursor, _, _, _, _ = check_screen(
             SCREEN_DRAG_RELEASE, M2_AFTER_ARROW_LEFT, M8_VARIF)
         notes += drag_ready_notes + drag_held_notes + drag_release_notes
-        notes.append("  " + check_focus_routing(
-            SCREEN_FOCUS_SYSTEM, SCREEN_FOCUS_DEMO))
-        notes += check_dragging(
-            drag_ready_cursor, drag_held_cursor, drag_release_cursor, size)
+        # In Demo's coordinates, because the rectangle the press has to land
+        # inside is recorded in those. The movements are the same either way;
+        # the containment check is not.
+        tile = demo_tile()
+        def in_demo(where):
+            return (where[0] - tile.client_x, where[1] - tile.client_y, where[2])
+        notes += check_dragging(in_demo(drag_ready_cursor),
+                                in_demo(drag_held_cursor),
+                                in_demo(drag_release_cursor), size)
         notes += check_rotation()
         notes += check_log()
         notes += check_cursor_cost()
+        notes += check_tiling()
+        notes += check_focus_moved()
+        notes += check_terminal()
+        notes += check_tiles_on_screen(SCREEN_FOCUS_SYSTEM)
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
         return 1
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M16 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M19 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
-          "presented through dirty regions rather than whole screen repaints")
+          "presented through dirty regions rather than whole screen repaints, "
+          "tiled into a desktop with a terminal that answers")
     print("A person should still watch it boot once with make run.")
     return 0
 

@@ -264,6 +264,106 @@ sixteen times in a run. The number that matters is not 247 against 300, it is
 247 against two million. Checked by putting the whole screen path back, which
 fails the check with 2,048,000.
 
+## M17 tiling layout
+
+Done. ME OS Default is tiling first. A normal window does not choose where it
+sits: it is given a tile, told the size of the area inside its frame, and asked
+to paint that. Opening one, hiding one or closing one recalculates every tile,
+so no two visible windows can overlap by construction rather than by a z-order
+that happens to keep them apart.
+
+One rule rather than a table of cases. Two columns, the left taking the master
+percentage of the width and holding half the windows rounded down, the right
+holding the rest, each column splitting its height evenly. One window fills the
+workspace, two sit side by side, three put one on the left and two on the right,
+four make a two by two grid. A table of special cases is where the case nobody
+drew goes wrong.
+
+A tile that cannot meet the minimum size is not placed at all rather than placed
+too small, so asking for more windows than the screen can hold gives fewer areas
+back and says so.
+
+The property that matters is checked as a property, not as four pictures. One to
+eight windows on five screen sizes, and no pair of tiles shares a pixel, and none
+reaches into a bar. Checked by pulling the right column four pixels left, which
+fails at every count from two upwards.
+
+Tile resizing moves the divider rather than dragging a corner, which is what
+resizing means in a tiling layout. Ctrl N and Ctrl W move it five percent at a
+time between twenty and eighty.
+
+## M18 the ME OS Default desktop
+
+Done. A top bar with the ME OS mark, the workspace, what has focus and the
+uptime. A taskbar with a launcher and one button per window. Tiles between them,
+with a small title strip, a hide button, a close button and a border that is the
+accent when the window has focus and dim when it does not.
+
+The focused border is the only thing that changes with focus, deliberately. It
+is what says which window the keyboard is talking to, and it does not need help
+from a differently coloured title or a heavier frame. It is also the only thing
+repainted on a focus change, so moving focus does not wipe every app's content
+to recolour four thin strips.
+
+Each window has one surface covering its whole tile and a client view onto the
+part inside the frame. The view shares the frame's pixels through the stride, so
+an app drawing in its own coordinates draws into the tile with no second buffer
+and no second blit, and cannot paint over its own frame.
+
+The tiles share one backing store rather than each having a private one. Tiles
+never overlap, so their areas together are never more than the workspace, and
+four private stores each big enough to be the only window cost four times the
+memory for a case that cannot happen. The first version did have four, and the
+zeroing at boot was long enough to see: the screenshot the boot test takes landed
+before the cursor was drawn.
+
+The bars are painted after composition rather than before, because the compositor
+clears what it composes, and only when the region being presented actually
+reaches one.
+
+Control is the modifier, not Super. The keyboard would decode Super perfectly
+well. Neither QEMU nor VirtualBox reliably delivers it, because the host's own
+window manager takes it first, and a shortcut that works here and silently does
+nothing on the next machine is worse than a different shortcut.
+
+Ctrl and an arrow moves focus. Ctrl H hides the focused window and the others
+grow into the space. Ctrl S brings every hidden window back. The last visible
+window is not allowed to hide, because a desktop with nothing on it and no way
+to get anything back is not a state worth reaching with one key.
+
+## M19 a terminal, and a machine that knows what it is
+
+Done. The thing that makes a machine feel like a computer rather than a picture
+of one is being able to type at it and have it answer.
+
+A character grid with scrollback and a line editor. The scroll happens when a
+character is written to a row past the end, not when a newline is typed: a
+newline only says the cursor has left this row, and scrolling eagerly meant the
+newest output was never on the bottom row where a person looks for it.
+
+What the commands mean is a separate file. A terminal that also knew what HELP
+meant could not be tested without testing every command at the same time.
+
+Every command reports something the kernel actually looked up. CPU asks CPUID.
+MEM adds up the memory map Limine handed over. RES is the resolution Limine
+chose. UPTIME is the same clock the rectangle moves on. WINDOWS counts the real
+windows. Nothing invents a filesystem, a process list or a network, because there
+are none, and a shell that answers questions the machine cannot answer is a mock
+up. A machine that could not be asked says so: MEM with no memory map prints that
+rather than a zero.
+
+Two things this found. The font had no lowercase, so "AuthenticAMD" came back as
+a row of boxes. And adding every memory map entry reported a machine with half a
+gigabyte as having twelve, because the hole between the top of RAM and the
+devices is enormous and is address space rather than memory.
+
+The title bar buttons, the taskbar buttons and the launcher all do something. A
+click on the desktop is offered to the window manager first, because the launcher,
+the taskbar and a tile's own title strip belong to it and not to the app inside
+the tile. Close puts a window away rather than destroying it, and says so in the
+log, because nothing here can build one again from nothing and a close that lost
+an app for the rest of the run would be worse.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -275,7 +375,7 @@ fails the check with 2,048,000.
 
 ## Verification status
 
-M1 to M16 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M19 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

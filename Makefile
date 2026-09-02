@@ -244,6 +244,51 @@ $(BUILD)/region_test: tests/region_test.c kernel/src/region.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/region_test.c kernel/src/region.c -o $@
 
+# The tiling layout is pure arithmetic, so the property that matters, that no
+# two visible windows ever share a pixel, is checked without a framebuffer.
+$(BUILD)/tile_test: tests/tile_test.c kernel/src/tile.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/tile_test.c kernel/src/tile.c -o $@
+
+# The shell only draws, so the checks are that it stays inside what it was
+# given and that a click is matched against the rectangle that was painted.
+$(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c \
+                     kernel/src/font.c kernel/src/region.c kernel/src/tile.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/shell_test.c kernel/src/shell.c \
+		kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
+		kernel/src/tile.c -o $@
+
+# The terminal, its line editor and every command it answers. No framebuffer
+# and no emulator: what is worth checking here is the scroll that drops a line,
+# the backspace that must not eat the prompt, and the sizes a person reads.
+$(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
+                    kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
+                    $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
+		kernel/src/cmd.c kernel/src/surface.c kernel/src/font.c \
+		kernel/src/region.c -o $@
+
+# CPUID unpacking, checked against registers whose answer is written down in
+# the manual. The instruction itself is not run here: a host is not necessarily
+# the machine the kernel boots on.
+$(BUILD)/cpu_test: tests/cpu_test.c kernel/src/cpu.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) -DME_NO_CPUID tests/cpu_test.c kernel/src/cpu.c -o $@
+
+# The whole environment: real window objects, real tiling, real surfaces, and
+# the invariant that no two visible tiles ever share a pixel.
+$(BUILD)/desktop_test: tests/desktop_test.c kernel/src/desktop.c kernel/src/shell.c \
+                       kernel/src/tile.c kernel/src/window.c kernel/src/event.c \
+                       kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
+                       kernel/src/compositor.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/desktop_test.c kernel/src/desktop.c \
+		kernel/src/shell.c kernel/src/tile.c kernel/src/window.c \
+		kernel/src/event.c kernel/src/surface.c kernel/src/font.c \
+		kernel/src/region.c kernel/src/compositor.c -o $@
+
 # mouse.c compiles on the host because only its pure decoding is called here.
 # Nothing in this test touches a port.
 $(BUILD)/pointer_test: tests/pointer_test.c kernel/src/mouse.c kernel/src/pointer.c $(HEADERS)
@@ -297,7 +342,9 @@ $(BUILD)/event_test: tests/event_test.c kernel/src/event.c $(HEADERS)
 test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
            $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
            $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test \
-           $(BUILD)/event_test $(BUILD)/region_test
+           $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
+           $(BUILD)/shell_test $(BUILD)/desktop_test \
+           $(BUILD)/term_test $(BUILD)/cpu_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -309,6 +356,11 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/surface_test
 	$(BUILD)/event_test
 	$(BUILD)/region_test
+	$(BUILD)/tile_test
+	$(BUILD)/shell_test
+	$(BUILD)/desktop_test
+	$(BUILD)/term_test
+	$(BUILD)/cpu_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
