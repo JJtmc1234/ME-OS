@@ -180,6 +180,123 @@ void cmdfs_write(struct cmd_context *context, const char *path, const char *text
     }
 }
 
+/* Two paths out of one argument list, for MV and CP. */
+static bool two_paths(struct cmd_context *context, const char *rest,
+                      const char *what, char *from, uint64_t from_capacity,
+                      const char **to)
+{
+    cmd_split(rest, from, from_capacity, to);
+    if (from[0] == '\0' || (*to)[0] == '\0') {
+        term_print(context->term, what);
+        term_println(context->term, " NEEDS SOMETHING TO MOVE AND SOMEWHERE TO PUT IT");
+        return false;
+    }
+    return true;
+}
+
+void cmdfs_mv(struct cmd_context *context, const char *rest)
+{
+    char from[VFS_PATH_MAX];
+    const char *to = "";
+    if (!two_paths(context, rest, "MV", from, sizeof from, &to)) {
+        return;
+    }
+    const enum vfs_result done = vfs_move(context->fs, from, to);
+    if (done != VFS_OK) {
+        complain(context->term, from, done);
+    }
+}
+
+void cmdfs_cp(struct cmd_context *context, const char *rest)
+{
+    char from[VFS_PATH_MAX];
+    const char *to = "";
+    if (!two_paths(context, rest, "CP", from, sizeof from, &to)) {
+        return;
+    }
+    const enum vfs_result done = vfs_copy(context->fs, from, to);
+    if (done != VFS_OK) {
+        complain(context->term, from, done);
+    }
+}
+
+void cmdfs_wc(struct cmd_context *context, const char *path)
+{
+    if (path[0] == '\0') {
+        term_println(context->term, "WC NEEDS A NAME");
+        return;
+    }
+    char text[VFS_FILE_MAX + 1];
+    uint64_t length = 0;
+    const enum vfs_result done =
+        vfs_read(context->fs, path, text, sizeof text, &length);
+    if (done != VFS_OK) {
+        complain(context->term, path, done);
+        return;
+    }
+
+    uint64_t lines = length == 0 ? 0 : 1;
+    uint64_t words = 0;
+    bool in_word = false;
+    for (uint64_t i = 0; i < length; i++) {
+        if (text[i] == '\n') {
+            lines++;
+        }
+        const bool blank = text[i] == ' ' || text[i] == '\n';
+        if (!blank && !in_word) {
+            words++;
+        }
+        in_word = !blank;
+    }
+
+    print_padded(context->term, lines, 5);
+    print_padded(context->term, words, 7);
+    print_padded(context->term, length, 8);
+    term_print(context->term, "  ");
+    term_println(context->term, path);
+}
+
+/* Walks the tree from `at`, drawing the shape of it with indentation. Depth
+ * bounded, because the tree cannot contain itself but a bug in MV could once
+ * have made it, and a recursive walk with no bottom takes the machine with it. */
+static void draw_tree(struct cmd_context *context, int16_t at, uint64_t depth)
+{
+    if (depth > 8) {
+        term_println(context->term, "  ... DEEPER THAN THIS WILL SHOW");
+        return;
+    }
+    for (int16_t child = vfs_first_child(context->fs, at); child != VFS_NONE;
+         child = vfs_next_sibling(context->fs, child)) {
+        const struct vfs_node *node = vfs_get(context->fs, child);
+        for (uint64_t i = 0; i < depth; i++) {
+            term_print(context->term, "  ");
+        }
+        term_print(context->term, node->kind == VFS_DIR ? "+ " : "  ");
+        term_print(context->term, node->name);
+        if (node->kind == VFS_DIR) {
+            term_print(context->term, "/");
+            term_newline(context->term);
+            draw_tree(context, child, depth + 1);
+        } else {
+            term_newline(context->term);
+        }
+    }
+}
+
+void cmdfs_tree(struct cmd_context *context, const char *path)
+{
+    const char *where = path[0] == '\0' ? "." : path;
+    const int16_t at = vfs_resolve(context->fs, where);
+    if (at == VFS_NONE) {
+        complain(context->term, where, VFS_NOT_FOUND);
+        return;
+    }
+    char full[VFS_PATH_MAX];
+    vfs_path_of(context->fs, at, full, sizeof full);
+    term_println(context->term, full);
+    draw_tree(context, at, 1);
+}
+
 void cmdfs_df(struct cmd_context *context)
 {
     struct term *term = context->term;

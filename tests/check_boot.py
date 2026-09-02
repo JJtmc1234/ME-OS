@@ -435,6 +435,60 @@ def check_terminal() -> list[str]:
             f"{made.split(' > ')[0].lower()} into a file it then read back"]
 
 
+def check_editor() -> list[str]:
+    """M21: a file was written in the editor and read back in the shell.
+
+    The order is the claim. Opening, typing, saving and then reading the same
+    file somewhere else is the loop that makes a filesystem worth having, and it
+    only means anything if the read comes after the save.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    lines = text.splitlines()
+
+    def when(phrase):
+        for i, line in enumerate(lines):
+            if phrase in line:
+                return i
+        raise CheckFailed(f"the kernel never reported {phrase!r}")
+
+    opened = when("editor opened TODO.TXT")
+    saved = when("editor saved TODO.TXT")
+    read = when("terminal ran CAT TODO.TXT")
+    if not opened < saved < read:
+        raise CheckFailed(
+            f"the editor's open, save and read happened in the order "
+            f"{opened}, {saved}, {read}, which is not open then save then read")
+
+    return ["M21 editor: opened a file, typed into it, saved it with Ctrl O, "
+            "and read it back from the shell afterwards"]
+
+
+def check_clock() -> list[str]:
+    """M21: the clock chip answered, and with something possible.
+
+    A wrong clock is worse than a missing one, because nothing downstream can
+    tell it is wrong. The kernel refuses an impossible reading, so this checks
+    that a reading arrived at all and that it looks like a date.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    for line in text.splitlines():
+        if "clock says " in line:
+            stamp = line.split("clock says ", 1)[1].strip()
+            date, _, clock = stamp.partition(" ")
+            parts = date.split("-")
+            if len(parts) != 3 or not all(p.isdigit() for p in parts):
+                raise CheckFailed(f"the clock reported {date!r}, which is not a date")
+            if len(clock.split(":")) != 3:
+                raise CheckFailed(f"the clock reported {clock!r}, which is not a time")
+            return [f"M21 clock: the chip answered {stamp}"]
+
+    # Not a failure. A machine whose clock will not answer is a real machine,
+    # and the kernel says so and shows the uptime instead.
+    if "clock chip would not answer" not in text:
+        raise CheckFailed("the kernel neither read the clock nor said it could not")
+    return ["M21 clock: the chip would not answer, and the bar says uptime instead"]
+
+
 def check_tiles_on_screen(path: Path) -> list[str]:
     """The tiles really are on the screen where the kernel said it put them.
 
@@ -784,6 +838,8 @@ def check_log() -> list[str]:
         "terminal ran CPU",
         "terminal ran MKDIR PROJECTS",
         "terminal ran CAT PROJECTS/NOTE.TXT",
+        "editor opened TODO.TXT",
+        "editor saved TODO.TXT",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -1199,6 +1255,8 @@ def main() -> int:
         notes += check_tiling()
         notes += check_focus_moved()
         notes += check_terminal()
+        notes += check_editor()
+        notes += check_clock()
         notes += check_tiles_on_screen(SCREEN_FOCUS_SYSTEM)
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -1206,13 +1264,13 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M20 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M21 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
           "presented through dirty regions rather than whole screen repaints, "
-          "tiled into a desktop with a shell that moves around a real filesystem")
+          "tiled into a desktop with a shell, an editor and a clock")
     print("A person should still watch it boot once with make run.")
     return 0
 

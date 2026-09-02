@@ -31,6 +31,8 @@
 #include "compositor.h"
 #include "cmd.h"
 #include "cpu.h"
+#include "editor.h"
+#include "rtc.h"
 #include "vfs.h"
 #include "desktop.h"
 #include "cursor.h"
@@ -173,6 +175,12 @@ static uint64_t total_memory_bytes;
 static uint64_t memory_regions;
 static bool launcher_open;
 static struct vfs filesystem;
+static struct editor text_editor;
+static WindowId editor_window_id;
+static struct rtc_time clock_time;
+static bool clock_answered;
+static char clock_date[16];
+static char clock_time_text[16];
 static uint32_t desktop_pixels[DESKTOP_MAX_WIDTH * DESKTOP_MAX_HEIGHT];
 static uint32_t tile_arena[TILE_ARENA_PIXELS];
 
@@ -293,7 +301,9 @@ static void compose_and_present(struct region region)
      * cursor moving across the middle of the screen redraws neither. */
     if (region_overlaps(region, desktop_top_bar_region(&desktop)) ||
         region_overlaps(region, desktop_taskbar_region(&desktop))) {
-        desktop_draw_bars(&desktop, &desktop_surface, uptime_seconds);
+        desktop_draw_bars(&desktop, &desktop_surface,
+                          clock_answered ? clock_time_text : NULL,
+                          uptime_seconds);
     }
     if (launcher_open && region_overlaps(region, launcher_region())) {
         draw_launcher();
@@ -661,6 +671,10 @@ static void handle_demo_event(const struct window_event *event)
 
 
 
+/* Declared here because the shell can ask for a file to be opened and the
+ * editor that opens it lives below, next to the rest of the editor. */
+static void open_in_editor(const char *path);
+
 /* --- the Terminal app -------------------------------------------------------
  *
  * The thing that makes a machine feel like a computer rather than a picture of
@@ -730,6 +744,16 @@ static void terminal_key(const struct window_event *event)
     const bool enter = event->data.key.code == WINDOW_KEY_ENTER;
     const bool backspace = event->data.key.code == WINDOW_KEY_BACKSPACE;
 
+    /* Up and down walk what was typed before, which is the one thing a shell
+     * without it is most obviously missing. */
+    if (event->data.key.code == WINDOW_KEY_UP ||
+        event->data.key.code == WINDOW_KEY_DOWN) {
+        if (term_history_step(&terminal, event->data.key.code == WINDOW_KEY_UP)) {
+            terminal_paint();
+        }
+        return;
+    }
+
     if (!term_key(&terminal, event->data.key.ch, enter, backspace,
                   line, sizeof line)) {
         terminal_paint();
@@ -749,8 +773,16 @@ static void terminal_key(const struct window_event *event)
         .cpu_brand = cpu_brand_text,
         .version = ME_OS_VERSION,
         .fs = &filesystem,
+        .date = clock_date,
+        .time = clock_time_text,
     };
     cmd_run(&context, line);
+
+    /* EDIT cannot open a window, so it says which file it wants and this does
+     * it. One direction: the shell asks, the desktop acts. */
+    if (context.open_editor[0] != '\0') {
+        open_in_editor(context.open_editor);
+    }
     /* The prompt follows the working directory, so CD has something to show for
      * itself and a person can see where they are without asking. */
     char prompt[VFS_PATH_MAX + 4];
@@ -775,6 +807,128 @@ static void drain_terminal_events(void)
         if (event.type == WINDOW_EVENT_KEY_DOWN) {
             terminal_key(&event);
         }
+    }
+}
+
+
+/* Declared here because the editor opens itself, which means putting a window
+ * back into the layout and moving focus to it, and both of those live further
+ * down with the rest of the desktop. */
+static void relayout_desktop(void);
+static void refresh_focus(void);
+
+/* --- the Editor app --------------------------------------------------------
+ *
+ * The shell could read a file and replace it with one line. Nothing could change
+ * the middle of one, which is most of what anybody does with a filesystem.
+ */
+
+static struct surface *editor_client(void)
+{
+    struct desktop_app *app =
+        desktop_app_at(&desktop, desktop_index_of(&desktop, editor_window_id));
+    return app == NULL || app->hidden ? NULL : &app->client;
+}
+
+static void editor_paint(void)
+{
+    struct surface *client = editor_client();
+    if (client == NULL) {
+        return;
+    }
+    editor_fit(&text_editor, client->width, client->height);
+    editor_draw(&text_editor, client, desktop.theme.chrome_text,
+                desktop.theme.window, desktop.theme.accent, desktop.theme.bar_dim);
+    present_region(desktop_client_region(&desktop, editor_window_id, 0, 0,
+                                         (int64_t)client->width,
+                                         (int64_t)client->height));
+}
+
+/* Writes the buffer back to the file it came from. */
+static void editor_save(void)
+{
+    if (text_editor.path[0] == '\0') {
+        editor_set_status(&text_editor, "NO FILE TO SAVE TO. USE EDIT NAME");
+        return;
+    }
+    char text[VFS_FILE_MAX + 1];
+    bool complete = false;
+    editor_text(&text_editor, text, sizeof text, &complete);
+    /* Refused rather than truncated. Saving part of a document over the whole of
+     * one is the worst thing an editor can do. */
+    if (!complete) {
+        editor_set_status(&text_editor, "TOO BIG FOR ONE FILE. NOTHING WAS SAVED");
+        return;
+    }
+    const enum vfs_result done = vfs_write(&filesystem, text_editor.path, text);
+    if (done != VFS_OK) {
+        editor_set_status(&text_editor, vfs_explain(done));
+        return;
+    }
+    text_editor.changed = false;
+    editor_set_status(&text_editor, "SAVED");
+    log_str("me-os: editor saved ");
+    log_str(text_editor.path);
+    log_str("\n");
+}
+
+/* Opens a file in the editor and puts the editor in front of somebody. */
+static void open_in_editor(const char *path)
+{
+    char text[VFS_FILE_MAX + 1];
+    const enum vfs_result found =
+        vfs_read(&filesystem, path, text, sizeof text, NULL);
+
+    editor_set_path(&text_editor, path);
+    if (found == VFS_OK) {
+        editor_load(&text_editor, text);
+    } else if (found == VFS_NOT_FOUND) {
+        /* A file that is not there yet is a new one, which is what every editor
+         * does when asked to open a name nothing has used. */
+        editor_load(&text_editor, "");
+        editor_set_status(&text_editor, "NEW FILE");
+    } else {
+        editor_load(&text_editor, "");
+        editor_set_status(&text_editor, vfs_explain(found));
+    }
+
+    if (desktop_set_hidden(&desktop, editor_window_id, false)) {
+        relayout_desktop();
+    }
+    window_focus(&window_manager, editor_window_id, false);
+    refresh_focus();
+    editor_paint();
+    log_str("me-os: editor opened ");
+    log_str(path);
+    log_str("\n");
+}
+
+static void drain_editor_events(void)
+{
+    struct window_event event;
+    while (window_next_event(&window_manager, editor_window_id, &event)) {
+        if (event.type != WINDOW_EVENT_KEY_DOWN) {
+            continue;
+        }
+        /* Control and a letter belongs to the app when the window manager did
+         * not claim it, which is how an app gets a shortcut of its own. */
+        if (event.data.key.ch == 'O' && event.data.key.ctrl) {
+            editor_save();
+        } else {
+            switch (event.data.key.code) {
+            case WINDOW_KEY_UP:        editor_move(&text_editor, 0, -1); break;
+            case WINDOW_KEY_DOWN:      editor_move(&text_editor, 0, 1); break;
+            case WINDOW_KEY_LEFT:      editor_move(&text_editor, -1, 0); break;
+            case WINDOW_KEY_RIGHT:     editor_move(&text_editor, 1, 0); break;
+            case WINDOW_KEY_ENTER:     editor_newline(&text_editor); break;
+            case WINDOW_KEY_BACKSPACE: editor_backspace(&text_editor); break;
+            case WINDOW_KEY_TAB:       editor_end(&text_editor); break;
+            case WINDOW_KEY_ESCAPE:    editor_home(&text_editor); break;
+            default:                   editor_insert(&text_editor,
+                                                     event.data.key.ch); break;
+            }
+        }
+        editor_paint();
     }
 }
 
@@ -1213,10 +1367,10 @@ static bool handle_shortcut(const struct kbd_key *key)
     }
 
     default:
-        /* Any other key held with control is still the desktop's, not the
-         * app's. Letting it through would type a letter the person did not mean
-         * into whatever has focus. */
-        return true;
+        /* Anything the desktop does not use goes on to whatever has focus, so an
+         * app can have a shortcut of its own. This used to swallow every
+         * control combination, which meant no app could ever have one. */
+        return false;
     }
 }
 
@@ -1441,7 +1595,7 @@ void kmain(void)
     }
 
     static const char *const titles[DESKTOP_MAX_APPS] = {
-        "DEMO", "SYSTEM INFO", "ABOUT ME OS", "TERMINAL",
+        "DEMO", "SYSTEM INFO", "ABOUT ME OS", "TERMINAL", "EDITOR",
     };
     for (size_t i = 0; i < DESKTOP_MAX_APPS; i++) {
         if (desktop_add(&desktop, titles[i]) != i) {
@@ -1450,6 +1604,24 @@ void kmain(void)
     }
     demo_window_id = desktop_app_at(&desktop, 0)->id;
     terminal_window_id = desktop_app_at(&desktop, 3)->id;
+    editor_window_id = desktop_app_at(&desktop, 4)->id;
+    editor_init(&text_editor);
+    editor_set_status(&text_editor, "CTRL O SAVES");
+
+    /* The clock, once at boot. It is read again on the tick that redraws the
+     * bar, so what is on screen is never more than a second old. */
+    clock_answered = rtc_read(&clock_time);
+    if (clock_answered) {
+        rtc_format_date(&clock_time, clock_date, sizeof clock_date);
+        rtc_format_time(&clock_time, clock_time_text, sizeof clock_time_text);
+        log_str("me-os: clock says ");
+        log_str(clock_date);
+        log_str(" ");
+        log_str(clock_time_text);
+        log_str("\n");
+    } else {
+        log_stage("the clock chip would not answer, so the bar shows uptime");
+    }
 
     /* Asked of the machine before anything reports it. */
     cpu_vendor(cpu_vendor_text, sizeof cpu_vendor_text);
@@ -1599,6 +1771,7 @@ void kmain(void)
                 .data.key = {
                     .ch = key.ch,
                     .code = window_key_code_for(&key),
+                    .ctrl = key.ctrl,
                 },
             };
             window_route_key(&window_manager, &event);
@@ -1608,6 +1781,7 @@ void kmain(void)
              * should do with a key press. */
             drain_demo_events();
             drain_terminal_events();
+            drain_editor_events();
         }
 
         /* One reading of the clock, shared by everything that moves, so the
@@ -1622,6 +1796,13 @@ void kmain(void)
         if (timer_carried >= TIMER_HZ) {
             uptime_seconds += timer_carried / TIMER_HZ;
             timer_carried %= TIMER_HZ;
+            /* Read again rather than counted up from the boot reading. The
+             * chip is the clock; anything else here would be a second one that
+             * could drift away from it. */
+            if (clock_answered && rtc_read(&clock_time)) {
+                rtc_format_time(&clock_time, clock_time_text, sizeof clock_time_text);
+                rtc_format_date(&clock_time, clock_date, sizeof clock_date);
+            }
             present_region(desktop_top_bar_region(&desktop));
             /* System Info reports the uptime, so it is redrawn on the same tick
              * as the bar that reports it. A window showing a clock that stopped
@@ -1733,6 +1914,7 @@ void kmain(void)
              * than composed over it afterwards. */
             drain_demo_events();
             drain_terminal_events();
+            drain_editor_events();
 
             if (focus_changed || handled_by_desktop) {
                 /* Raising a window reorders everything it touches, and the

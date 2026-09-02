@@ -199,7 +199,8 @@ static uint64_t put_text(char *out, uint64_t capacity, uint64_t at, const char *
 
 void shell_top_bar(struct surface *desktop, const struct theme *theme,
                    int64_t width, int64_t height,
-                   int64_t workspace, const char *focused, uint64_t uptime_seconds)
+                   int64_t workspace, const char *focused,
+                   const char *clock, uint64_t uptime_seconds)
 {
     if (!surface_valid(desktop) || theme == NULL || height <= 0) {
         return;
@@ -227,14 +228,18 @@ void shell_top_bar(struct surface *desktop, const struct theme *theme,
         surface_draw_string(desktop, focused, x, text_y, theme->bar_text, 1);
     }
 
-    /* Uptime on the right, as minutes and seconds. A clock needs a real time
-     * source, and claiming one that does not exist would be worse than saying
+    /* The time of day on the right when there is one, and the uptime when the
+     * clock chip would not answer. Inventing a time would be worse than saying
      * how long the machine has been up, which is true and which this knows. */
-    n = put_text(line, sizeof line, 0, "UP ");
-    n += put_number(line + n, sizeof line - n, uptime_seconds / 60);
-    n = put_text(line, sizeof line, n, "M ");
-    n += put_number(line + n, sizeof line - n, uptime_seconds % 60);
-    n = put_text(line, sizeof line, n, "S");
+    if (clock != NULL && clock[0] != '\0') {
+        n = put_text(line, sizeof line, 0, clock);
+    } else {
+        n = put_text(line, sizeof line, 0, "UP ");
+        n += put_number(line + n, sizeof line - n, uptime_seconds / 60);
+        n = put_text(line, sizeof line, n, "M ");
+        n += put_number(line + n, sizeof line - n, uptime_seconds % 60);
+        n = put_text(line, sizeof line, n, "S");
+    }
     line[n] = '\0';
     const int64_t right = width - BAR_PAD - (int64_t)n * FONT_WIDTH;
     if (right > x) {

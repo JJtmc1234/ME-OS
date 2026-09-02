@@ -23,7 +23,7 @@
 #include "tile.h"
 #include "window.h"
 
-#define DESKTOP_MAX_APPS 4
+#define DESKTOP_MAX_APPS 5
 
 struct desktop_app {
     WindowId id;
@@ -87,7 +87,7 @@ void desktop_paint_frames(struct desktop *desktop);
  * before it, because the compositor clears what it composes and would wipe
  * them. */
 void desktop_draw_bars(struct desktop *desktop, struct surface *target,
-                       uint64_t uptime_seconds);
+                       const char *clock, uint64_t uptime_seconds);
 
 struct region desktop_top_bar_region(const struct desktop *desktop);
 struct region desktop_taskbar_region(const struct desktop *desktop);

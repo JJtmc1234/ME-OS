@@ -132,7 +132,7 @@ static void test_the_bars_stay_in_their_own_strips(void)
     surface_clear(&desktop, 0x00FF00u);
 
     const struct theme theme = theme_default(rgb);
-    shell_top_bar(&desktop, &theme, width, top_height, 1, "DEMO", 125);
+    shell_top_bar(&desktop, &theme, width, top_height, 1, "DEMO", "12:34:56", 125);
 
     bool below_untouched = true;
     for (int64_t y = top_height; y < height; y++) {

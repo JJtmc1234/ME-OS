@@ -188,6 +188,10 @@ type_line() {
 # The middle of the M5 rectangle, in screen coordinates, from what the kernel
 # has most recently said about itself. The rectangle drifts, so its place is a
 # function of how long the machine has been up and cannot be worked out here.
+#
+# It also waits for the rectangle to be far enough from the left edge that the
+# drag below has room. A drag that runs into the edge is clamped, and the check
+# would then read a preserved offset as a broken one when nothing is broken.
 rectangle_centre() {
     local tile rect cx cy rx ry rw rh
     tile=$(grep "me-os: tile DEMO at " "$SERIAL_LOG" | tail -1)
@@ -198,6 +202,19 @@ rectangle_centre() {
         echo "640 500"
         return
     fi
+    # Wait for room to drag into. It drifts right at sixty pixels a second and
+    # wraps, so a usable position is never more than a few seconds away.
+    local waited=0
+    while [ "$waited" -lt 25 ]; do
+        rx=$(echo "$rect" | sed 's/.* rectangle at \([0-9]*\),.*/\1/')
+        if [ "$rx" -ge 300 ] 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+        rect=$(grep "me-os: rectangle at " "$SERIAL_LOG" | tail -1)
+    done
+
     cx=$(echo "$tile" | sed 's/.* client \([0-9]*\),.*/\1/')
     cy=$(echo "$tile" | sed 's/.* client [0-9]*,\([0-9]*\) .*/\1/')
     rx=$(echo "$rect" | sed 's/.* rectangle at \([0-9]*\),.*/\1/')
@@ -386,6 +403,22 @@ rectangle_centre() {
     type_line "echo tiling works > projects/note.txt"
     type_line "cat projects/note.txt"
     type_line "ls projects"
+
+    # M21. Open a file in the editor, type three lines into it, save it with
+    # Ctrl O, then go back to the terminal and read it out. That is the whole
+    # loop a person would use, and every part of it is real.
+    type_line "edit todo.txt"
+    sleep 1
+    type_line "me os todo"
+    type_line "  workspaces next"
+    type_line "  then a disk driver"
+    echo "sendkey ctrl-o"
+    sleep 1
+    echo "sendkey ctrl-left"
+    sleep 1
+    type_line "cat todo.txt"
+    type_line "wc todo.txt"
+    type_line "date"
     sleep 2
     echo "screendump $SHOT_FOCUS_SYSTEM"
     sleep 2

@@ -78,9 +78,13 @@ bool shell_hide_button(int64_t width, int64_t border, struct tile_area *out);
 bool shell_close_button(int64_t width, int64_t border, struct tile_area *out);
 
 /* The top bar: the ME OS mark, the workspace, what has focus, and the uptime. */
+/* `clock` is the time of day, or NULL when the chip would not answer, in which
+ * case the bar shows the uptime instead. A bar that invented a time would be
+ * worse than one that says how long the machine has been up, which is true. */
 void shell_top_bar(struct surface *desktop, const struct theme *theme,
                    int64_t width, int64_t height,
-                   int64_t workspace, const char *focused, uint64_t uptime_seconds);
+                   int64_t workspace, const char *focused,
+                   const char *clock, uint64_t uptime_seconds);
 
 /* One entry on the taskbar. */
 struct shell_task {

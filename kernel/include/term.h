@@ -25,6 +25,9 @@
 #define TERM_MAX_COLS 160
 #define TERM_MAX_ROWS 80
 #define TERM_INPUT_MAX 96
+/* How many lines back the arrows reach. Enough to get at what you just did
+ * wrong, which is what history is actually for. */
+#define TERM_HISTORY 12
 
 struct term {
     char cells[TERM_MAX_ROWS][TERM_MAX_COLS];
@@ -43,6 +46,12 @@ struct term {
      * make CD a command with no visible effect. Set by the caller, which is the
      * only thing that knows there is a filesystem. */
     char prompt[TERM_INPUT_MAX];
+    /* The lines already run, newest last, and where the arrows currently are.
+     * `history_at` equal to the count means the line being typed now, which is
+     * what pressing down at the newest entry goes back to. */
+    char history[TERM_HISTORY][TERM_INPUT_MAX];
+    uint32_t history_count;
+    uint32_t history_at;
 };
 
 /* `cols` and `rows` are clamped to what the grid can hold and to at least one
@@ -73,6 +82,11 @@ void term_print_number(struct term *term, uint64_t value);
  * rather than stored, so what is on the screen is what was typed. */
 bool term_key(struct term *term, char ch, bool enter, bool backspace,
               char *out, uint64_t capacity);
+
+/* Walks the history and puts what it finds on the input line. `back` is true for
+ * the older direction. Returns false when there is nowhere to go, so the caller
+ * knows whether anything needs redrawing. */
+bool term_history_step(struct term *term, bool back);
 
 /* The prompt and what has been typed so far, as one string, so the drawing and
  * any test agree about what the bottom line says. */

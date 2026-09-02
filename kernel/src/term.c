@@ -197,6 +197,24 @@ bool term_key(struct term *term, char ch, bool enter, bool backspace,
 
     if (enter) {
         term->input[term->input_length] = '\0';
+        /* Kept before the line is handed over, and only when there is something
+         * to keep. A history full of blank entries is a history you have to
+         * scroll past to reach anything. */
+        if (term->input_length > 0) {
+            if (term->history_count == TERM_HISTORY) {
+                for (uint32_t i = 0; i + 1 < TERM_HISTORY; i++) {
+                    for (uint32_t c = 0; c < TERM_INPUT_MAX; c++) {
+                        term->history[i][c] = term->history[i + 1][c];
+                    }
+                }
+                term->history_count--;
+            }
+            for (uint32_t c = 0; c < TERM_INPUT_MAX; c++) {
+                term->history[term->history_count][c] = term->input[c];
+            }
+            term->history_count++;
+        }
+        term->history_at = term->history_count;
         if (out != NULL && capacity > 0) {
             uint64_t i = 0;
             for (; i + 1 < capacity && term->input[i] != '\0'; i++) {
@@ -220,7 +238,46 @@ bool term_key(struct term *term, char ch, bool enter, bool backspace,
     }
     term->input[term->input_length++] = ch;
     term->input[term->input_length] = '\0';
+    /* Typing puts you back on the line you are writing rather than in the
+     * middle of the history, which is where the next arrow should start from. */
+    term->history_at = term->history_count;
     return false;
+}
+
+bool term_history_step(struct term *term, bool back)
+{
+    if (term == NULL || term->history_count == 0) {
+        return false;
+    }
+    if (back) {
+        if (term->history_at == 0) {
+            return false;
+        }
+        term->history_at--;
+    } else {
+        if (term->history_at >= term->history_count) {
+            return false;
+        }
+        term->history_at++;
+    }
+
+    /* Past the newest entry is the empty line you were typing, which is what
+     * pressing down at the end goes back to. */
+    if (term->history_at >= term->history_count) {
+        term->input[0] = '\0';
+        term->input_length = 0;
+        return true;
+    }
+
+    uint32_t length = 0;
+    while (term->history[term->history_at][length] != '\0' &&
+           length + 1 < TERM_INPUT_MAX) {
+        term->input[length] = term->history[term->history_at][length];
+        length++;
+    }
+    term->input[length] = '\0';
+    term->input_length = length;
+    return true;
 }
 
 uint64_t term_prompt_line(const struct term *term, char *out, uint64_t capacity)

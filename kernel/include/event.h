@@ -44,6 +44,10 @@ struct window_event {
         struct {
             char ch;
             enum window_key_code code;
+            /* Control was held. Carried through so an app can have a shortcut
+             * of its own for the combinations the window manager does not
+             * claim, which is how the editor gets Ctrl O for save. See M21. */
+            bool ctrl;
         } key;
     } data;
 };

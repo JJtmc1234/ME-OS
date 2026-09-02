@@ -401,6 +401,51 @@ The shell found a real gap in the keyboard. It listed README.TXT and then could
 not be told to open it, because full stop was only decoded with shift held,
 where it is a greater than sign. Comma, full stop and underscore are now keys.
 
+## M21 an editor, a clock, and a shell you can work in
+
+Done. The filesystem could be listed and walked, and nothing could change the
+middle of a line in it, which is most of what anybody does with files. This is
+the milestone that makes it an environment rather than a demonstration.
+
+**The editor.** Lines you can move around in and change, with a cursor,
+scrolling, and Ctrl O to save. `EDIT NAME` from the shell opens it, loads the
+file if there is one and starts a new one if there is not, and puts the window
+in front of you.
+
+The parts worth testing are the ones a person notices in a minute and a compiler
+never will. Typing in the middle of a line has to insert rather than overwrite.
+Enter has to leave the head of the line where it was and take the tail down with
+it, and getting that backwards puts the tail of every line above its own head,
+which is what the test checks by breaking it. Backspace at the start of a line
+joins it to the one above. Moving down from a long line onto a short one has to
+bring the cursor in, or the next character is written past a terminator.
+
+A document that will not fit the file is refused rather than truncated. Saving
+part of a document over the whole of one is the worst thing an editor can do.
+
+**The clock.** The machine has known the date since it was switched on and
+nothing had ever asked it. The CMOS chip reports either binary or binary coded
+decimal, and reading one as the other gives a clock that is right for the first
+ten minutes of every hour. The afternoon bit is in the top of the hour byte, and
+midnight is twelve rather than zero, so adding twelve to both puts midnight at
+noon. Both are checked against values from the datasheet.
+
+The registers are read twice and only a matching pair is trusted, because the
+chip can tick between the first register and the last and report an hour that
+never happened. A reading that is impossible is thrown away and the bar shows
+the uptime instead, because a wrong clock is worse than a missing one: nothing
+downstream can tell it is wrong.
+
+**A shell you can work in.** Command history on the arrows, MV, CP, WC and TREE,
+and DATE. Moving a directory inside itself is refused, because that takes the
+whole subtree out of the tree and leaves it pointing at its own parent where
+nothing can reach it again.
+
+**Apps can have shortcuts now.** The window manager used to swallow every
+control combination, which meant no app could ever have one. It now takes only
+the ones it uses and passes the rest to whatever has focus, which is how Ctrl O
+reaches the editor.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -412,7 +457,7 @@ where it is a greater than sign. Comma, full stop and underscore are now keys.
 
 ## Verification status
 
-M1 to M20 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M21 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

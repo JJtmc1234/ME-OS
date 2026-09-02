@@ -259,6 +259,51 @@ static int16_t free_node(struct vfs *fs)
     return VFS_NONE;
 }
 
+/* Whether `maybe_parent` is `node` or anywhere above it. */
+static bool is_within(const struct vfs *fs, int16_t node, int16_t maybe_parent)
+{
+    for (int16_t here = node; ; here = fs->nodes[here].parent) {
+        if (here == maybe_parent) {
+            return true;
+        }
+        if (here == 0) {
+            return false;
+        }
+    }
+}
+
+/* Takes an entry out of its parent's list without freeing it. */
+static void unlink_from_parent(struct vfs *fs, int16_t at)
+{
+    const int16_t parent = fs->nodes[at].parent;
+    if (fs->nodes[parent].first_child == at) {
+        fs->nodes[parent].first_child = fs->nodes[at].next_sibling;
+        return;
+    }
+    int16_t before = fs->nodes[parent].first_child;
+    while (before != VFS_NONE && fs->nodes[before].next_sibling != at) {
+        before = fs->nodes[before].next_sibling;
+    }
+    if (before != VFS_NONE) {
+        fs->nodes[before].next_sibling = fs->nodes[at].next_sibling;
+    }
+}
+
+static void link_into(struct vfs *fs, int16_t parent, int16_t at)
+{
+    fs->nodes[at].parent = parent;
+    fs->nodes[at].next_sibling = VFS_NONE;
+    if (fs->nodes[parent].first_child == VFS_NONE) {
+        fs->nodes[parent].first_child = at;
+        return;
+    }
+    int16_t last = fs->nodes[parent].first_child;
+    while (fs->nodes[last].next_sibling != VFS_NONE) {
+        last = fs->nodes[last].next_sibling;
+    }
+    fs->nodes[last].next_sibling = at;
+}
+
 /* Makes one entry in a directory. The two creating commands differ only in the
  * kind they ask for, so they share everything else. */
 static enum vfs_result make(struct vfs *fs, const char *path, enum vfs_kind kind,
@@ -442,19 +487,84 @@ enum vfs_result vfs_remove(struct vfs *fs, const char *path)
         }
     }
 
-    const int16_t parent = fs->nodes[at].parent;
-    if (fs->nodes[parent].first_child == at) {
-        fs->nodes[parent].first_child = fs->nodes[at].next_sibling;
-    } else {
-        int16_t before = fs->nodes[parent].first_child;
-        while (before != VFS_NONE && fs->nodes[before].next_sibling != at) {
-            before = fs->nodes[before].next_sibling;
-        }
-        if (before != VFS_NONE) {
-            fs->nodes[before].next_sibling = fs->nodes[at].next_sibling;
-        }
-    }
+    unlink_from_parent(fs, at);
     fs->nodes[at].used = false;
+    return VFS_OK;
+}
+
+enum vfs_result vfs_move(struct vfs *fs, const char *from, const char *to)
+{
+    if (fs == NULL) {
+        return VFS_BAD_NAME;
+    }
+    const int16_t at = vfs_resolve(fs, from);
+    if (at == VFS_NONE) {
+        return VFS_NOT_FOUND;
+    }
+    if (at == 0) {
+        return VFS_BAD_NAME;
+    }
+
+    const char *name = NULL;
+    uint64_t length = 0;
+    const int16_t parent = walk(fs, to, true, &name, &length);
+    if (parent == VFS_NONE) {
+        return VFS_NOT_FOUND;
+    }
+    if (fs->nodes[parent].kind != VFS_DIR) {
+        return VFS_NOT_A_DIRECTORY;
+    }
+    if (!usable_name(name, length)) {
+        return VFS_BAD_NAME;
+    }
+    if (child_named(fs, parent, name, length) != VFS_NONE) {
+        return VFS_EXISTS;
+    }
+    /* A directory moved inside itself takes its whole subtree out of the tree
+     * and leaves it pointing at its own parent, which nothing can then reach. */
+    if (is_within(fs, parent, at)) {
+        return VFS_BAD_NAME;
+    }
+
+    unlink_from_parent(fs, at);
+    for (uint64_t i = 0; i < length; i++) {
+        fs->nodes[at].name[i] = name[i];
+    }
+    fs->nodes[at].name[length] = '\0';
+    link_into(fs, parent, at);
+    return VFS_OK;
+}
+
+enum vfs_result vfs_copy(struct vfs *fs, const char *from, const char *to)
+{
+    if (fs == NULL) {
+        return VFS_BAD_NAME;
+    }
+    const int16_t at = vfs_resolve(fs, from);
+    if (at == VFS_NONE) {
+        return VFS_NOT_FOUND;
+    }
+    /* Copying a directory means copying everything under it, which is a
+     * different operation with a different way to run out of room part way. */
+    if (fs->nodes[at].kind != VFS_FILE) {
+        return VFS_IS_A_DIRECTORY;
+    }
+    if (vfs_resolve(fs, to) != VFS_NONE) {
+        return VFS_EXISTS;
+    }
+
+    int16_t made = VFS_NONE;
+    const enum vfs_result created = make(fs, to, VFS_FILE, &made);
+    if (created != VFS_OK) {
+        return created;
+    }
+    /* Read from the source after the destination exists, because making it may
+     * have been what filled the filesystem up. */
+    const struct vfs_node *source = &fs->nodes[at];
+    for (uint32_t i = 0; i < source->length; i++) {
+        fs->nodes[made].data[i] = source->data[i];
+    }
+    fs->nodes[made].length = source->length;
     return VFS_OK;
 }
 

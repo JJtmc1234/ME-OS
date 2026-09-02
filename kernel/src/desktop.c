@@ -198,7 +198,7 @@ struct region desktop_taskbar_region(const struct desktop *desktop)
 }
 
 void desktop_draw_bars(struct desktop *desktop, struct surface *target,
-                       uint64_t uptime_seconds)
+                       const char *clock, uint64_t uptime_seconds)
 {
     if (desktop == NULL || target == NULL) {
         return;
@@ -209,7 +209,7 @@ void desktop_draw_bars(struct desktop *desktop, struct surface *target,
 
     shell_top_bar(target, &desktop->theme, desktop->screen_width,
                   desktop->layout.top_bar, desktop->workspace, name,
-                  uptime_seconds);
+                  clock, uptime_seconds);
 
     struct shell_task tasks[DESKTOP_MAX_APPS];
     for (size_t i = 0; i < desktop->app_count; i++) {

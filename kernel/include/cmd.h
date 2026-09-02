@@ -35,6 +35,13 @@ struct cmd_context {
     const char *cpu_vendor;
     const char *cpu_brand;
     const char *version;
+    /* The time of day, when the clock answered. Empty when it did not, which
+     * DATE says rather than printing a plausible one. */
+    const char *date;
+    const char *time;
+    /* Set by EDIT to the file it wants opened. The shell cannot open a window,
+     * so it says what it wants and the caller, which can, does it. */
+    char open_editor[VFS_PATH_MAX];
     /* The filesystem the file commands act on. In memory, because there is no
      * disk driver yet, and real all the same. */
     struct vfs *fs;
@@ -71,6 +78,10 @@ void cmdfs_touch(struct cmd_context *context, const char *path);
 void cmdfs_cat(struct cmd_context *context, const char *path);
 void cmdfs_rm(struct cmd_context *context, const char *path);
 void cmdfs_write(struct cmd_context *context, const char *path, const char *text);
+void cmdfs_mv(struct cmd_context *context, const char *rest);
+void cmdfs_cp(struct cmd_context *context, const char *rest);
+void cmdfs_wc(struct cmd_context *context, const char *path);
+void cmdfs_tree(struct cmd_context *context, const char *path);
 void cmdfs_df(struct cmd_context *context);
 
 #endif /* ME_CMD_H */

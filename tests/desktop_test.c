@@ -39,7 +39,7 @@ static uint32_t arena[POOL_PIXELS];
 static uint32_t screen_pixels[POOL_PIXELS];
 
 static const char *const NAMES[DESKTOP_MAX_APPS] = {
-    "DEMO", "SYSTEM", "ABOUT", "NOTES",
+    "DEMO", "SYSTEM", "ABOUT", "NOTES", "EDITOR",
 };
 
 static struct window_manager windows;
@@ -262,7 +262,7 @@ static void test_the_bars_are_drawn_after_composition(void)
 
     check(compositor_compose(&windows, &screen, desktop.theme.desktop),
           "compose the windows");
-    desktop_draw_bars(&desktop, &screen, 125);
+    desktop_draw_bars(&desktop, &screen, "12:34:56", 125);
 
     check(surface_pixel(&screen, 4, 4) == desktop.theme.bar,
           "the top bar is on the screen");

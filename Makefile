@@ -354,6 +354,20 @@ $(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
 		kernel/src/cmd.c kernel/src/cmdfs.c kernel/src/vfs.c \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 
+# The editor on its own: insert in the middle, split a line, join two, and the
+# round trip that saving a file depends on.
+$(BUILD)/editor_test: tests/editor_test.c kernel/src/editor.c kernel/src/surface.c \
+                      kernel/src/font.c kernel/src/region.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/editor_test.c kernel/src/editor.c \
+		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
+
+# The clock's decoding, against values from the chip's datasheet. The chip
+# itself is not read: a development machine is not the machine that boots.
+$(BUILD)/rtc_test: tests/rtc_test.c kernel/src/rtc.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) -DME_NO_CMOS tests/rtc_test.c kernel/src/rtc.c -o $@
+
 # The filesystem on its own. Path resolution, the root that cannot be climbed
 # out of, and the working directory that must not be deleted from under you.
 $(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c $(HEADERS)
@@ -434,7 +448,8 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test \
            $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
            $(BUILD)/shell_test $(BUILD)/desktop_test \
-           $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test
+           $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
+           $(BUILD)/editor_test $(BUILD)/rtc_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -450,6 +465,8 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/shell_test
 	$(BUILD)/desktop_test
 	$(BUILD)/vfs_test
+	$(BUILD)/editor_test
+	$(BUILD)/rtc_test
 	$(BUILD)/term_test
 	$(BUILD)/cpu_test
 

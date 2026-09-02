@@ -38,15 +38,17 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M18 the ME OS Default desktop | Bars, frames, focus, keyboard control and a launcher | Verified software milestone, QEMU |
 | M19 terminal and system information | A shell whose answers all come from the machine | Verified software milestone, QEMU |
 | M20 filesystem and file commands | A real tree in memory, and PWD, LS, CD, MKDIR, CAT and the rest | Verified software milestone, QEMU |
-| M21 workspaces | More than one set of tiles, switched by keyboard | Next |
+| M21 editor, clock and a working shell | A text editor, the real time of day, history, MV, CP, WC and TREE | Verified software milestone, QEMU |
+| M22 workspaces | More than one set of tiles, switched by keyboard | Next |
 
-All twenty finished milestones are checked automatically. `make test` boots the
+All twenty one finished milestones are checked automatically. `make test` boots the
 image headlessly, types at it, moves the mouse, opens and closes windows, and
 inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs seventeen programs on the development machine with no emulator, covering
+runs nineteen programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
 clamping, the tiling layout, the desktop, the terminal and its commands, and
-the processor identification, and the filesystem. See
+the processor identification, the filesystem, the text editor and the
+clock. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it
@@ -105,10 +107,19 @@ The Terminal window takes commands. `HELP` lists them.
 bootloader handed over, `RES` reports the resolution, `UPTIME` reads the same
 clock the rectangle moves on, and `WINDOWS` counts the real windows.
 
-`PWD`, `LS`, `CD`, `MKDIR`, `TOUCH`, `CAT`, `WRITE`, `RM` and `DF` move around a
-real filesystem, and `ECHO TEXT > FILE` writes one from the keyboard. It lives in
-memory, because there is no disk driver yet, so nothing in it survives a restart
-and `DF` says so every time it is asked.
+`PWD`, `LS`, `CD`, `MKDIR`, `TOUCH`, `CAT`, `WRITE`, `RM`, `MV`, `CP`, `WC`,
+`TREE` and `DF` move around a real filesystem, and `ECHO TEXT > FILE` writes one
+from the keyboard. The up and down arrows walk back through what you have typed.
+`DATE` asks the CMOS clock chip, which is also what the time in the top bar comes
+from.
+
+The filesystem lives in memory, because there is no disk driver yet, so nothing
+in it survives a restart and `DF` says so every time it is asked.
+
+`EDIT NAME` opens a file in the Editor window. Arrows move the cursor, typing
+inserts, Enter splits a line, Backspace at the start of one joins it to the line
+above, and **Ctrl O** saves. It loads a file that exists and starts a new one
+that does not.
 
 Nothing invents a process list or a network, because there are none.
 

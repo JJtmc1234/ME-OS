@@ -119,6 +119,7 @@ static void command_help(struct term *term)
     term_println(term, "  MEM      MEMORY THE BOOTLOADER REPORTED");
     term_println(term, "  RES      SCREEN SIZE");
     term_println(term, "  UPTIME   HOW LONG SINCE BOOT");
+    term_println(term, "  DATE     THE TIME OF DAY, FROM THE CLOCK CHIP");
     term_println(term, "  WINDOWS  HOW MANY ARE OPEN");
     term_println(term, "FILES");
     term_println(term, "  PWD      WHERE YOU ARE");
@@ -129,6 +130,11 @@ static void command_help(struct term *term)
     term_println(term, "  CAT      SHOW A FILE");
     term_println(term, "  WRITE    PUT A LINE IN A FILE");
     term_println(term, "  RM       DELETE A FILE OR EMPTY DIRECTORY");
+    term_println(term, "  MV       MOVE OR RENAME");
+    term_println(term, "  CP       COPY A FILE");
+    term_println(term, "  WC       COUNT LINES, WORDS AND BYTES");
+    term_println(term, "  TREE     THE SHAPE OF A DIRECTORY");
+    term_println(term, "  EDIT     OPEN A FILE IN THE EDITOR");
     term_println(term, "  DF       HOW MUCH ROOM IS LEFT");
     term_println(term, "THIS TERMINAL");
     term_println(term, "  ECHO     SAY SOMETHING BACK");
@@ -319,6 +325,38 @@ void cmd_run(struct cmd_context *context, const char *line)
             cmdfs_df(context);
             return;
         }
+        if (same(name, "MV")) {
+            cmdfs_mv(context, rest);
+            return;
+        }
+        if (same(name, "CP")) {
+            cmdfs_cp(context, rest);
+            return;
+        }
+        if (same(name, "WC")) {
+            cmdfs_wc(context, rest);
+            return;
+        }
+        if (same(name, "TREE")) {
+            cmdfs_tree(context, rest);
+            return;
+        }
+        if (same(name, "EDIT")) {
+            if (rest[0] == '\0') {
+                term_println(term, "EDIT NEEDS A NAME");
+                return;
+            }
+            /* Said rather than done. The shell cannot open a window, so it
+             * writes down what it wants and the caller, which can, acts on it
+             * after this returns. */
+            uint64_t i = 0;
+            for (; rest[i] != '\0' && rest[i] != ' ' &&
+                   i + 1 < sizeof context->open_editor; i++) {
+                context->open_editor[i] = rest[i];
+            }
+            context->open_editor[i] = '\0';
+            return;
+        }
         if (same(name, "WRITE")) {
             /* The name, then everything after it, so a line with spaces in it
              * lands in the file whole. */
@@ -346,6 +384,16 @@ void cmd_run(struct cmd_context *context, const char *line)
         term_println(term, " 32 BPP");
     } else if (same(name, "UPTIME")) {
         command_uptime(context);
+    } else if (same(name, "DATE") || same(name, "TIME")) {
+        /* A machine that could not be asked says so. A wrong clock is worse
+         * than a missing one, because nothing downstream can tell. */
+        if (context->date == NULL || context->date[0] == '\0') {
+            term_println(term, "THE CLOCK CHIP WOULD NOT ANSWER");
+        } else {
+            term_print(term, context->date);
+            term_print(term, " ");
+            term_println(term, context->time);
+        }
     } else if (same(name, "WINDOWS")) {
         command_windows(context);
     } else if (same(name, "ECHO")) {

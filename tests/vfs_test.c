@@ -309,6 +309,69 @@ static void test_nonsense_is_refused(void)
     check(all_explained, "and not one of them is blank");
 }
 
+static void test_moving_and_copying(void)
+{
+    printf("moving an entry takes it out of one place and puts it in another\n");
+    vfs_init(&fs);
+    vfs_mkdir(&fs, "/A");
+    vfs_mkdir(&fs, "/B");
+    vfs_write(&fs, "/A/NOTE.TXT", "CONTENT");
+
+    check(vfs_move(&fs, "/A/NOTE.TXT", "/B/NOTE.TXT") == VFS_OK, "the move works");
+    check(vfs_resolve(&fs, "/A/NOTE.TXT") == VFS_NONE, "it is gone from A");
+    check(vfs_resolve(&fs, "/B/NOTE.TXT") != VFS_NONE, "and is in B");
+    char text[VFS_FILE_MAX + 1];
+    vfs_read(&fs, "/B/NOTE.TXT", text, sizeof text, NULL);
+    check(strcmp(text, "CONTENT") == 0, "with what was in it");
+    check(vfs_count_children(&fs, vfs_resolve(&fs, "/A")) == 0, "A is empty now");
+
+    printf("a move within one directory is a rename\n");
+    check(vfs_move(&fs, "/B/NOTE.TXT", "/B/RENAMED.TXT") == VFS_OK, "renaming works");
+    check(vfs_resolve(&fs, "/B/RENAMED.TXT") != VFS_NONE, "under the new name");
+    check(vfs_resolve(&fs, "/B/NOTE.TXT") == VFS_NONE, "and not the old one");
+
+    printf("a move onto something that is already there is refused\n");
+    vfs_write(&fs, "/A/OTHER.TXT", "X");
+    check(vfs_move(&fs, "/A/OTHER.TXT", "/B/RENAMED.TXT") == VFS_EXISTS,
+          "so nothing is quietly replaced");
+    check(vfs_resolve(&fs, "/A/OTHER.TXT") != VFS_NONE, "and the source stays");
+
+    /* The one that would take a whole subtree out of the tree and leave it
+     * pointing at its own parent, where nothing could ever reach it again. */
+    printf("a directory cannot be moved inside itself\n");
+    vfs_mkdir(&fs, "/A/DEEP");
+    check(vfs_move(&fs, "/A", "/A/DEEP/A") == VFS_BAD_NAME, "it is refused");
+    check(vfs_resolve(&fs, "/A") != VFS_NONE, "and A is still where it was");
+    check(vfs_resolve(&fs, "/A/DEEP") != VFS_NONE, "with what was under it");
+    check(vfs_move(&fs, "/A", "/A/A") == VFS_BAD_NAME, "nor directly into itself");
+    check(vfs_move(&fs, "/", "/A/ROOT") == VFS_BAD_NAME, "and the root moves nowhere");
+
+    printf("moving something that is not there says so\n");
+    check(vfs_move(&fs, "/GONE", "/B/GONE") == VFS_NOT_FOUND, "the source");
+    check(vfs_move(&fs, "/A/OTHER.TXT", "/NOWHERE/X") == VFS_NOT_FOUND,
+          "and the destination directory");
+
+    printf("copying a file makes a second one with the same contents\n");
+    vfs_init(&fs);
+    vfs_write(&fs, "/ONE", "THE SAME");
+    check(vfs_copy(&fs, "/ONE", "/TWO") == VFS_OK, "the copy works");
+    vfs_read(&fs, "/TWO", text, sizeof text, NULL);
+    check(strcmp(text, "THE SAME") == 0, "with the contents copied");
+    vfs_read(&fs, "/ONE", text, sizeof text, NULL);
+    check(strcmp(text, "THE SAME") == 0, "and the original untouched");
+
+    printf("and the copy is its own file afterwards\n");
+    vfs_write(&fs, "/TWO", "CHANGED");
+    vfs_read(&fs, "/ONE", text, sizeof text, NULL);
+    check(strcmp(text, "THE SAME") == 0, "changing one does not change the other");
+
+    printf("copying a directory, or onto something, is refused\n");
+    vfs_mkdir(&fs, "/D");
+    check(vfs_copy(&fs, "/D", "/D2") == VFS_IS_A_DIRECTORY, "a directory");
+    check(vfs_copy(&fs, "/ONE", "/TWO") == VFS_EXISTS, "and onto a file that exists");
+    check(vfs_copy(&fs, "/GONE", "/X") == VFS_NOT_FOUND, "and one that is not there");
+}
+
 int main(void)
 {
     test_an_empty_filesystem_is_a_root_and_nothing_else();
@@ -317,6 +380,7 @@ int main(void)
     test_files_hold_what_was_put_in_them();
     test_the_wrong_kind_of_thing_is_refused();
     test_removing();
+    test_moving_and_copying();
     test_the_filesystem_fills_up_honestly();
     test_nonsense_is_refused();
 

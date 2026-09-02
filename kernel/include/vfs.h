@@ -27,7 +27,7 @@
  * fragment, cannot leak and cannot be got wrong. The cost is that a small file
  * takes as much room as a large one, which matters when there is a disk and
  * does not matter yet. */
-#define VFS_FILE_MAX  200
+#define VFS_FILE_MAX  512
 #define VFS_PATH_MAX  256
 
 /* Nothing, rather than a node. Signed so it can be told from index zero, which
@@ -98,6 +98,15 @@ enum vfs_result vfs_read(const struct vfs *fs, const char *path,
  * thing this should be able to do. */
 enum vfs_result vfs_remove(struct vfs *fs, const char *path);
 enum vfs_result vfs_chdir(struct vfs *fs, const char *path);
+
+/* Moves an entry, which is a rename when the destination is in the same
+ * directory. Refuses to move a directory into itself, because that would take
+ * the whole subtree out of the tree and leave it pointing at its own parent. */
+enum vfs_result vfs_move(struct vfs *fs, const char *from, const char *to);
+
+/* Copies a file. Directories are refused: copying one means copying everything
+ * under it, which is a different operation with a different way to fail. */
+enum vfs_result vfs_copy(struct vfs *fs, const char *from, const char *to);
 
 /* How many nodes are in use and how many there are, so a person can see the
  * limit rather than meeting it. */
