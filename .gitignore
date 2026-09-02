@@ -3,3 +3,7 @@ build/
 
 # Limine bootloader binaries, fetched by the Makefile at build time
 boot/limine/
+
+# Python leaves these beside the check script when it imports it.
+__pycache__/
+*.pyc
