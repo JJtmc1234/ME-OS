@@ -45,6 +45,7 @@ void cmdinfo_help(struct cmd_out *out)
     cmd_println(out, "  HEAD     THE FIRST LINES, 10 BY DEFAULT");
     cmd_println(out, "  TAIL     THE LAST LINES");
     cmd_println(out, "  SORT     LINES IN ORDER");
+    cmd_println(out, "  RUN      DO WHAT A FILE OF COMMANDS SAYS");
     cmd_println(out, "  EDIT     OPEN A FILE IN THE EDITOR");
     cmd_println(out, "  DF       HOW MUCH ROOM IS LEFT");
     cmd_println(out, "THIS TERMINAL");

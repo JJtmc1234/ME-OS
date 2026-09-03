@@ -65,8 +65,20 @@ struct cmd_context {
     uint64_t disk_sector_bytes;
 };
 
+/* How many commands may be running inside each other.
+ *
+ * RUN is the only thing that nests them, so this is the bound on how deep a
+ * script may go and, more to the point, what stops a script that runs itself.
+ * On a machine with no memory protection, following that down is not an error
+ * message, it is a dead machine. */
+#define CMD_MAX_DEPTH 4
+
 /* Runs one line. An empty line is not an error and prints nothing extra, which
- * is what pressing Enter at a prompt does on every other machine. */
+ * is what pressing Enter at a prompt does on every other machine.
+ *
+ * Calls itself, through RUN. Everything it keeps between stages is indexed by
+ * how deep it is, so an inner pipeline cannot write over an outer one's
+ * output. */
 void cmd_run(struct cmd_context *context, const char *line);
 
 /* Pure. Splits a line into the command and the rest, uppercasing the command so
@@ -107,6 +119,11 @@ void cmdtext_tail(struct cmd_context *context, const char *rest);
 /* On its own, because it is the one that has to hold every line before it can
  * print any of them. */
 void cmdsort_run(struct cmd_context *context, const char *path);
+
+/* Runs a file of commands, one line at a time. Blank lines and lines starting
+ * with `#` are skipped. It calls `cmd_run`, which calls this again for a script
+ * that runs another, and CMD_MAX_DEPTH is what stops one that runs itself. */
+void cmdrun_script(struct cmd_context *context, const char *path);
 
 /* The filesystem commands. In their own file because moving around a tree and
  * asking the machine what it is are two different jobs. */

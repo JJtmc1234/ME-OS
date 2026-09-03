@@ -336,7 +336,7 @@ check-reproducible:
 # dispatcher and its pipeline, files, text filters, and somewhere to write.
 CMD_SRCS := kernel/src/cmd.c kernel/src/cmdline.c kernel/src/cmdinfo.c \
             kernel/src/cmdfs.c kernel/src/cmdtext.c kernel/src/cmdsort.c \
-            kernel/src/cmdout.c
+            kernel/src/cmdout.c kernel/src/cmdrun.c
 
 VFS_SRCS := kernel/src/vfs.c kernel/src/vfspath.c kernel/src/vfstree.c \
             kernel/src/vfsfile.c kernel/src/vfsmove.c kernel/src/vfsblock.c

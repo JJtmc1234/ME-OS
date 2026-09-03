@@ -98,6 +98,10 @@ static void run_one(struct cmd_context *context, const char *line)
             cmdsort_run(context, rest);
             return;
         }
+        if (same(name, "RUN")) {
+            cmdrun_script(context, rest);
+            return;
+        }
         if (same(name, "TREE")) {
             cmdfs_tree(context, rest);
             return;
@@ -170,21 +174,43 @@ static void run_one(struct cmd_context *context, const char *line)
     }
 }
 
-/* Splits a line at the first `|`, trimming the blanks either side of it.
+/* The buffers a pipeline passes its output through, two for each depth.
  *
- * Returns false when there is no bar, in which case the whole line is the one
- * stage. Quoting is not handled because this shell has none: a bar in a line is
- * always a bar.
+ * Two is enough however long one pipeline is: a stage reads one and writes the
+ * other, and the one it read is free again as soon as it has finished.
+ *
+ * A set for each depth is what M27 needed. A script runs its lines through
+ * `cmd_run`, so `cmd_run` calls itself, and one pair shared between the outer
+ * pipeline and the inner one would have the script writing over the output of
+ * the command that started it. Nothing would report an error: the outer command
+ * would simply produce the inner one's answer.
+ *
+ * Static rather than on the stack, because a pair is twelve kilobytes and a
+ * kernel stack should not be asked for that.
  */
+static char pipe_a[CMD_MAX_DEPTH][VFS_FILE_MAX + 1];
+static char pipe_b[CMD_MAX_DEPTH][VFS_FILE_MAX + 1];
 
-static char pipe_a[VFS_FILE_MAX + 1];
-static char pipe_b[VFS_FILE_MAX + 1];
+/* How deep the shell is running commands inside commands. Only RUN increases
+ * it, and it is the bound on both the buffers above and on a script that runs
+ * itself. */
+static uint64_t depth;
 
 void cmd_run(struct cmd_context *context, const char *line)
 {
     if (context == NULL || context->term == NULL || context->out == NULL) {
         return;
     }
+    if (depth >= CMD_MAX_DEPTH) {
+        /* A script that runs itself, most likely. Said and stopped rather than
+         * followed down until the stack runs out, which on a machine with no
+         * memory protection is not an error message but a dead machine. */
+        term_println(context->term,
+                     "THAT IS TOO MANY COMMANDS INSIDE COMMANDS. STOPPED.");
+        return;
+    }
+    const uint64_t level = depth++;
+
     struct cmd_out *const screen = context->out;
 
     /* The prompt the line was typed at, not a fixed one, so the history shows
@@ -227,6 +253,7 @@ void cmd_run(struct cmd_context *context, const char *line)
             if (line[i] == '>') {
                 term_println(context->term,
                              "AN ARROW NEEDS A COMMAND AND A NAME FOR THE FILE");
+                depth--;
                 return;
             }
         }
@@ -262,7 +289,7 @@ void cmd_run(struct cmd_context *context, const char *line)
         if (last && !to_file) {
             context->out = screen;
         } else {
-            held = n % 2 == 0 ? pipe_a : pipe_b;
+            held = n % 2 == 0 ? pipe_a[level] : pipe_b[level];
             cmd_out_to_buffer(&capture, held, VFS_FILE_MAX + 1);
             context->out = &capture;
         }
@@ -312,4 +339,6 @@ void cmd_run(struct cmd_context *context, const char *line)
             term_println(context->term, vfs_explain(done));
         }
     }
+
+    depth--;
 }

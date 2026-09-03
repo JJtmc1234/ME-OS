@@ -666,6 +666,121 @@ static void test_scrollback(void)
     check(termback_row(NULL, 0) == NULL, "and no terminal has no rows");
 }
 
+/* M27. A file of commands, and the two ways that can go wrong: a script that
+ * runs itself, and an inner pipeline writing over an outer one's output. */
+static void test_running_a_file_of_commands(void)
+{
+    struct term term;
+    struct vfs fs;
+    char row[TERM_MAX_COLS + 1];
+    char text[VFS_FILE_MAX + 1];
+    term_init(&term, 60, 24);
+    vfs_init(&fs);
+    struct cmd_out output;
+    cmd_out_to_term(&output, &term);
+    struct cmd_context context = {
+        .out = &output, .term = &term, .fs = &fs, .version = "0.27" };
+
+    printf("a script runs each of its lines\n");
+    check(vfs_write(&fs, "/SETUP.TXT",
+                    "MKDIR WORK\n"
+                    "WRITE WORK/A.TXT FIRST\n"
+                    "WRITE WORK/B.TXT SECOND") == VFS_OK, "a script written");
+    cmd_run(&context, "RUN /SETUP.TXT");
+    check(vfs_resolve(&fs, "/WORK") != VFS_NONE, "the directory it made");
+    check(vfs_read(&fs, "/WORK/A.TXT", text, sizeof text, NULL) == VFS_OK,
+          "and the first file");
+    check(strcmp(text, "FIRST") == 0, "holding what the script said");
+    check(vfs_read(&fs, "/WORK/B.TXT", text, sizeof text, NULL) == VFS_OK,
+          "and the second");
+
+    printf("blank lines and comments are skipped rather than run\n");
+    check(vfs_write(&fs, "/NOTES.TXT",
+                    "# THIS IS A COMMENT\n"
+                    "\n"
+                    "   # SO IS THIS ONE, INDENTED\n"
+                    "WRITE /RAN.TXT YES") == VFS_OK, "a script with comments");
+    term_clear(&term);
+    cmd_run(&context, "RUN /NOTES.TXT");
+    check(vfs_read(&fs, "/RAN.TXT", text, sizeof text, NULL) == VFS_OK,
+          "the real line ran");
+    check(strstr(row_of(&term, 1, row), "NO SUCH COMMAND") == NULL,
+          "and no comment was taken for a command");
+
+    printf("a script can use a pipe and an arrow like anything else\n");
+    check(vfs_write(&fs, "/LIST.TXT", "LS /WORK | SORT > /SORTED.TXT") == VFS_OK,
+          "a script with a pipeline in it");
+    cmd_run(&context, "RUN /LIST.TXT");
+    check(vfs_read(&fs, "/SORTED.TXT", text, sizeof text, NULL) == VFS_OK,
+          "the pipeline inside the script ran");
+    check(strstr(text, "A.TXT") != NULL, "and wrote what it should");
+
+    printf("a script that runs another does not lose the outer one's output\n");
+    check(vfs_write(&fs, "/INNER.TXT", "ECHO INNER > /INNER-OUT.TXT") == VFS_OK,
+          "an inner script");
+    check(vfs_write(&fs, "/OUTER.TXT",
+                    "RUN /INNER.TXT\n"
+                    "ECHO OUTER > /OUTER-OUT.TXT") == VFS_OK, "and an outer one");
+    cmd_run(&context, "RUN /OUTER.TXT");
+    check(vfs_read(&fs, "/INNER-OUT.TXT", text, sizeof text, NULL) == VFS_OK,
+          "the inner one wrote its file");
+    check(strcmp(text, "INNER") == 0, "with its own answer in it");
+    check(vfs_read(&fs, "/OUTER-OUT.TXT", text, sizeof text, NULL) == VFS_OK,
+          "and so did the outer one");
+    check(strcmp(text, "OUTER") == 0,
+          "with its own answer, not the inner one's");
+
+    /* The case the separate buffers are actually for.
+     *
+     * The outer RUN is capturing into a buffer because of the arrow. A line
+     * inside it that has its own pipe starts a second capture while the first
+     * is still being filled. Sharing one pair between them empties the outer
+     * buffer halfway through, and the only sign of it is a short file. */
+    printf("a pipeline inside a redirected script does not empty the capture\n");
+    check(vfs_write(&fs, "/NESTED.TXT",
+                    "ECHO FIRST\n"
+                    "ECHO MIDDLE | SORT\n"
+                    "ECHO LAST") == VFS_OK, "a script with a pipe in the middle");
+    cmd_run(&context, "RUN /NESTED.TXT > /NESTED-OUT.TXT");
+    check(vfs_read(&fs, "/NESTED-OUT.TXT", text, sizeof text, NULL) == VFS_OK,
+          "it wrote the file");
+    check(strstr(text, "FIRST") != NULL, "the line before the pipe survived");
+    check(strstr(text, "MIDDLE") != NULL, "the pipe's own answer is there");
+    check(strstr(text, "LAST") != NULL, "and so is the line after it");
+
+    printf("a script that runs itself stops instead of taking the machine down\n");
+    check(vfs_write(&fs, "/LOOP.TXT", "RUN /LOOP.TXT") == VFS_OK, "a script that loops");
+    term_clear(&term);
+    cmd_run(&context, "RUN /LOOP.TXT");
+    /* Reaching here at all is most of the check: without the depth guard this
+     * follows itself down until the stack runs out, which on a machine with no
+     * memory protection is not an error message. */
+    check(true, "it came back");
+    bool said = false;
+    for (uint32_t r = 0; r < term.rows; r++) {
+        if (strstr(row_of(&term, r, row), "TOO MANY") != NULL) {
+            said = true;
+        }
+    }
+    check(said, "and said why rather than stopping quietly");
+
+    printf("a script that is not there is reported\n");
+    term_clear(&term);
+    cmd_run(&context, "RUN /NOWHERE.TXT");
+    check(strstr(row_of(&term, 1, row), "NO SUCH FILE") != NULL, "it says so");
+
+    printf("and RUN with no name at all\n");
+    term_clear(&term);
+    cmd_run(&context, "RUN");
+    check(strstr(row_of(&term, 1, row), "NEEDS THE NAME") != NULL, "it says so");
+
+    printf("the shell still works afterwards, so the depth came back down\n");
+    term_clear(&term);
+    cmd_run(&context, "ECHO STILL HERE");
+    check(strcmp(row_of(&term, 1, row), "STILL HERE") == 0,
+          "an ordinary command runs");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -678,6 +793,7 @@ int main(void)
     test_the_file_commands();
     test_pipes_and_general_redirection();
     test_scrollback();
+    test_running_a_file_of_commands();
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

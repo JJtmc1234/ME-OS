@@ -161,6 +161,19 @@ CURSOR_START_Y_DIVISOR = 6
 # Must match scripts/boot-capture.sh.
 MOUSE_DX = 120
 MOUSE_DY = -60
+# How far the M11 drag pulls the pointer, and which way.
+#
+# Read from the file the capture script writes rather than written down twice.
+# Which way it drags depends on where the rectangle was when the pointer was
+# aimed at it, so this cannot be a constant here without the two disagreeing on
+# the runs where it went the other way.
+def drag_delta() -> int:
+    path = BUILD_DIR / "drag-delta.txt"
+    if not path.exists():
+        raise CheckFailed(
+            "scripts/boot-capture.sh did not say how far it dragged, so there "
+            "is nothing to check the drag against")
+    return int(path.read_text().strip())
 
 FONT_WIDTH = 8
 FONT_HEIGHT = 8
@@ -592,6 +605,14 @@ def check_persistence() -> list[str]:
             "the file written before the restart is not on the disk after it: "
             + holds[-1])
 
+    # M27. The script made this, and nothing else did. A line the shell ran from
+    # a file is not logged as typed, which is right, so what the script did is
+    # the only evidence that it ran at all.
+    if "MADE-BY-SCRIPT" not in holds[-1]:
+        raise CheckFailed(
+            "what the script was told to make is not there, so RUN did not run "
+            "it: " + holds[-1])
+
     # M24. One file that really spans blocks, not a total across the filesystem.
     # A hundred single block files add up to the same number as fifty of two, so
     # only the largest file can answer whether the join between two blocks was
@@ -618,6 +639,7 @@ def check_persistence() -> list[str]:
             f"    after  {largest[-1]}")
 
     return [f"M23 disk: {found[-1].split('me-os: disk ')[-1]}",
+            "M27 scripts: RUN made MADE-BY-SCRIPT, and it survived the restart",
             f"M24 blocks: {largest[-1].split('largest file ')[-1]}, so a file "
             f"that spans blocks came back whole",
             f"M23 persistence: {loaded[-1].split('disk, ')[-1]} came back after "
@@ -1007,6 +1029,7 @@ def check_log() -> list[str]:
         "editor opened TODO.TXT",
         "editor saved TODO.TXT",
         "terminal ran LS | SORT > SORTED.TXT",
+        "terminal ran RUN SETUP.TXT",
         "terminal ran CAT SORTED.TXT | GREP TXT",
         "window moved to workspace ",
         "workspace 2",
@@ -1248,9 +1271,24 @@ def check_dragging(ready_cursor, held_cursor, released_cursor, size) -> list[str
     pointer_delta = (held_cursor[0] - ready_cursor[0],
                      held_cursor[1] - ready_cursor[1])
     rectangle_delta = (held[1] - ready[1], held[2] - ready[2])
-    if pointer_delta != (-180, 30):
+
+    # A pointer that ran into the edge of the screen is a run that could not ask
+    # the question, which is a different thing from an answer of no. Said in its
+    # own words, because reporting it as a wrong offset sends whoever reads it
+    # looking at the drag code, where there is nothing wrong. Told apart from a
+    # wrong answer by the movement being short in the direction it was going,
+    # which is the only thing an edge can do to it.
+    wanted = drag_delta()
+    if pointer_delta[0] != wanted and abs(pointer_delta[0]) < abs(wanted):
         raise CheckFailed(
-            f"the held pointer moved {pointer_delta}, expected (-180, 30)")
+            f"the drag ran the pointer into the edge of the screen: it started "
+            f"at x={ready_cursor[0]}, was pulled {wanted}, and only moved "
+            f"{pointer_delta[0]}. This run could not test dragging at all, and "
+            f"it is the aim in scripts/boot-capture.sh that needs looking at, "
+            f"not the drag")
+    if pointer_delta != (wanted, 30):
+        raise CheckFailed(
+            f"the held pointer moved {pointer_delta}, expected ({wanted}, 30)")
     if rectangle_delta != pointer_delta:
         raise CheckFailed(
             f"the pointer moved {pointer_delta} while the held rectangle moved "
@@ -1437,7 +1475,7 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M26 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M27 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
@@ -1447,7 +1485,7 @@ def main() -> int:
           "on a filesystem of files made of blocks that is still there after "
           "the machine restarts, with a shell whose commands can be piped "
           "into each other and written to files, and a scrollback you can "
-          "look at what went past in")
+          "look at what went past in, running files of commands you wrote")
     print("A person should still watch it boot once with make run.")
     return 0
 

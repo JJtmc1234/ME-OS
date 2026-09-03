@@ -93,6 +93,10 @@ TYPE_DELAY="${TYPE_DELAY:-0.25}"
 # exactly this, so the two belong together.
 MOUSE_DX="${MOUSE_DX:-120}"
 MOUSE_DY="${MOUSE_DY:--60}"
+# How far the M11 drag pulls the pointer left, in two equal packets. Named
+# because tests/check_boot.py expects exactly this and the aim above has to
+# leave room for it.
+DRAG_LEFT=180
 # Which key to inject. tests/check_boot.py expects this letter on screen.
 KEY="${KEY:-a}"
 DEBUG_LOG="$BUILD_DIR/debug.log"
@@ -194,6 +198,7 @@ type_line() {
             ".") echo "sendkey dot" ;;
             ">") echo "sendkey shift-dot" ;;
             "|") echo "sendkey shift-backslash" ;;
+            "-") echo "sendkey minus" ;;
             *)   echo "sendkey $c" ;;
         esac
         sleep 0.07
@@ -210,7 +215,7 @@ type_line() {
 # drag below has room. A drag that runs into the edge is clamped, and the check
 # would then read a preserved offset as a broken one when nothing is broken.
 rectangle_centre() {
-    local tile rect cx cy rx ry rw rh
+    local tile rect cx cy rx ry rw rh aim_x aim_y
     tile=$(grep "me-os: tile DEMO at " "$SERIAL_LOG" | tail -1)
     rect=$(grep "me-os: rectangle at " "$SERIAL_LOG" | tail -1)
     if [ -z "$tile" ] || [ -z "$rect" ]; then
@@ -219,26 +224,40 @@ rectangle_centre() {
         echo "640 500"
         return
     fi
-    # Wait for room to drag into. It drifts right at sixty pixels a second and
-    # wraps, so a usable position is never more than a few seconds away.
-    local waited=0
-    while [ "$waited" -lt 25 ]; do
-        rx=$(echo "$rect" | sed 's/.* rectangle at \([0-9]*\),.*/\1/')
-        if [ "$rx" -ge 300 ] 2>/dev/null; then
-            break
-        fi
-        sleep 1
-        waited=$(( waited + 1 ))
-        rect=$(grep "me-os: rectangle at " "$SERIAL_LOG" | tail -1)
-    done
-
     cx=$(echo "$tile" | sed 's/.* client \([0-9]*\),.*/\1/')
     cy=$(echo "$tile" | sed 's/.* client [0-9]*,\([0-9]*\) .*/\1/')
     rx=$(echo "$rect" | sed 's/.* rectangle at \([0-9]*\),.*/\1/')
     ry=$(echo "$rect" | sed 's/.* rectangle at [0-9]*,\([0-9]*\) .*/\1/')
     rw=$(echo "$rect" | sed 's/.*size \([0-9]*\)x.*/\1/')
     rh=$(echo "$rect" | sed 's/.*size [0-9]*x\([0-9]*\).*/\1/')
-    echo "$(( cx + rx + rw / 2 )) $(( cy + ry + rh / 2 ))"
+
+    # A quarter of the way in rather than the middle. The rectangle drifts while
+    # the pointer is being moved, so relative to it the cursor slides the other
+    # way, and starting nearer the leading edge leaves longer before the press
+    # would fall off it.
+    aim_x=$(( cx + rx + rw / 4 ))
+    aim_y=$(( cy + ry + rh / 2 ))
+
+    # Which way to drag, decided from where the cursor will actually be rather
+    # than from where the rectangle is.
+    #
+    # This used to wait for the rectangle to drift somewhere with room to its
+    # left, which is not something it reliably does: it stops moving while a
+    # window is being laid out, and the wait would time out and then aim
+    # wherever it had got to. A drag that ran into the edge of the screen was
+    # reported as a wrong offset, which is not what had gone wrong.
+    #
+    # There is no waiting now. Whichever side has room is the side it drags to,
+    # and the distance is written down for tests/check_boot.py to read, so the
+    # test asserts what was actually asked for.
+    if [ "$aim_x" -ge $(( DRAG_LEFT + 80 )) ]; then
+        DRAG_DX=$(( -DRAG_LEFT ))
+    else
+        DRAG_DX=$DRAG_LEFT
+    fi
+    echo "$DRAG_DX" > "$BUILD_DIR/drag-delta.txt"
+    echo "boot-capture: aiming the drag at $aim_x,$aim_y and pulling $DRAG_DX" >&2
+    echo "$aim_x $aim_y"
 }
 
 # The monitor reads these commands from stdin once the guest has booted.
@@ -347,6 +366,10 @@ rectangle_centre() {
     # aiming is a matter of reading that rather than guessing at a place it will
     # happen to be.
     read -r TARGET_X TARGET_Y <<< "$(rectangle_centre)"
+    # Out of the file rather than out of a variable. `rectangle_centre` runs in
+    # a command substitution, which is its own shell, so what it set in there
+    # did not come back out.
+    DRAG_DX=$(cat "$BUILD_DIR/drag-delta.txt")
     move_pointer_to "$TARGET_X" "$TARGET_Y"
     sleep 1
     echo "screendump $SHOT_DRAG_READY"
@@ -355,9 +378,9 @@ rectangle_centre() {
     sleep "$TYPE_DELAY"
     echo "screendump $SHOT_FOCUS_DEMO"
     sleep 2
-    echo "mouse_move -90 15"
+    echo "mouse_move $(( DRAG_DX / 2 )) 15"
     sleep "$TYPE_DELAY"
-    echo "mouse_move -90 15"
+    echo "mouse_move $(( DRAG_DX / 2 )) 15"
     sleep 2
     echo "screendump $SHOT_DRAG_HELD"
     sleep 2
@@ -446,6 +469,11 @@ rectangle_centre() {
     type_line "df"
     # M26. Fill the screen, then look back at what scrolled off it. HELP is the
     # longest thing the shell prints, so it is what pushes lines off the top.
+    # M27. Write a script from the shell, then run it. Nothing about it is
+    # special cased: RUN reads the same lines a person would type.
+    type_line "write setup.txt mkdir /made-by-script"
+    type_line "run setup.txt"
+    type_line "ls"
     type_line "help"
     echo "sendkey pgup"
     sleep 1
@@ -545,7 +573,7 @@ if [ -s "$DEBUG_LOG" ]; then
 fi
 echo "boot-capture: steered the rectangle with $STEER_DOWN_KEYS then $STEER_LEFT_KEYS"
 echo "boot-capture: wrapped it with down then $WRAP_LEFT_PRESSES presses of left"
-echo "boot-capture: dragged the rectangle -180 30, released it, then moved the pointer 80 0"
+echo "boot-capture: dragged the rectangle $(cat "$BUILD_DIR/drag-delta.txt") 30, released it, then moved the pointer 80 0"
 echo "boot-capture: showed all four windows, hid two, moved focus, and showed them again"
 if [ -s "$DEBUG_LOG_AGAIN" ]; then
     echo "boot-capture: kernel log of the second boot"

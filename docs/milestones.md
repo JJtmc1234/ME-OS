@@ -745,6 +745,91 @@ reach would have been the same as no scrollback. They are named keys rather than
 characters, so they can never land in a sum or a filename, and the boot test
 presses the real keys and reads the kernel's own report of where the view went.
 
+## M27 files of commands, which is where a machine stops being a demonstration
+
+Done. `RUN SETUP.TXT` reads a file and does what it says, one line at a time.
+
+The machine could make files, change them, search them, sort them and keep them
+through a restart. It could not do anything with one except read it back. This
+is the difference between a filesystem and a thing you can teach.
+
+**A script is a file of the same lines you would type.** No variables, no loops,
+no conditions. Those are a language, and a shell that grows one by accident
+grows it badly. What this adds is writing down a sequence you do often and
+running it again, which is what most scripts anybody actually writes are. Blank
+lines and lines starting with `#` are skipped, so a script can say what it is
+for.
+
+**Everything already in the shell works inside one.** A script line can pipe and
+can redirect, because RUN hands each line to the same `cmd_run` the keyboard
+does. There is no second, smaller shell inside the first one, which is where
+this sort of thing usually goes wrong.
+
+**And that is the whole difficulty.** `cmd_run` now calls itself, and it was
+never written to be called twice at once.
+
+**The pipeline buffers are per depth.** A pipeline captures its stages into two
+buffers. With one pair shared, a script whose output is being captured, running
+a line that has its own pipe, starts a second capture into the buffer the first
+one is still filling. The outer buffer is emptied halfway through and the only
+sign of it is a short file. Nothing reports an error. There is a test for
+exactly that shape, `RUN NESTED.TXT > OUT.TXT` where the script has a pipe in
+the middle of it, and sharing the buffers fails it.
+
+The first version of that test did not catch it. It nested two scripts, which
+looks like the dangerous case and is not: the inner one finishes before the
+outer one's next line begins, so their buffers never overlap in time. The
+collision needs the outer stage to still be mid capture, which takes a redirect
+on the outside and a pipe on the inside. Mutation testing is what found that the
+first test proved nothing.
+
+**A script that runs itself stops and says so.** Four deep is the limit, checked
+in two places: in RUN, so the file is not even read, and in `cmd_run`, which is
+the one that actually protects the stack. Taking the guard out and running the
+tests does not fail a check, it crashes the test program, which is what it would
+do to the machine. There is no memory protection here. A stack that runs out is
+not an error message.
+
+**The keyboard gained the minus key in the test harness**, which is not the
+kernel's fault: the decoder had known it since M20 and the script that types at
+QEMU did not know its name.
+
+**The drag test was flaky, and the flake was worth chasing.** It failed twice
+saying the held pointer had moved 175 pixels instead of 180. Reading the cursor
+out of the captures showed it starting at x=175 and ending at x=0: the drag had
+run into the edge of the screen and lost the difference.
+
+The first guess was that the mouse was losing packets, which would have been a
+real fault and the one thing this project cares most about. It is not: with the
+aim fixed the cursor lands on exactly the pixel it was aimed at, 1015 of 1015.
+`mouse_decode` and the drain loop are both doing their jobs.
+
+What was actually wrong was the aim, and the first fix for it was wrong too. It
+waited for the rectangle to drift somewhere with room to its left. The rectangle
+does not reliably do that: it stops moving while a window is being laid out, and
+the wait would time out and then aim at wherever it had got to, which was
+sometimes twenty five pixels from the edge.
+
+Waiting was the wrong idea. There is no wait now. The script drags whichever way
+has room from where the cursor actually lands, and writes down which way it
+chose, so the check asserts what was really asked for instead of a number
+written in two places that can disagree. It also aims a quarter of the way into
+the rectangle rather than the middle, so the drift takes twice as long to carry
+the press off it.
+
+A pointer that reaches an edge anyway is now reported as a run that could not ask
+the question rather than as an answer of no. That is told from a real wrong
+answer by the movement being short in the direction it was going, which is the
+only thing an edge can do to it.
+
+The check that matters did not change: the rectangle has to move exactly as far
+as the pointer did, whatever that was.
+
+**A line a script runs is not logged as typed**, which is right, and it means
+the boot test cannot look for it in the log. What proves RUN ran is what it left
+behind: the script makes a directory at the root, and the machine reports it in
+the listing it prints after the restart. Evidence rather than an announcement.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -756,7 +841,7 @@ presses the real keys and reads the kernel's own report of where the view went.
 
 ## Verification status
 
-M1 to M26 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M27 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
