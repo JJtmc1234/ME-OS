@@ -77,13 +77,17 @@ void shell_focus_border(struct surface *frame, const struct theme *theme,
 bool shell_hide_button(int64_t width, int64_t border, struct tile_area *out);
 bool shell_close_button(int64_t width, int64_t border, struct tile_area *out);
 
-/* The top bar: the ME OS mark, the workspace, what has focus, and the uptime. */
-/* `clock` is the time of day, or NULL when the chip would not answer, in which
- * case the bar shows the uptime instead. A bar that invented a time would be
- * worse than one that says how long the machine has been up, which is true. */
+/* The top bar: the ME OS mark, every workspace, what has focus, and the clock.
+ *
+ * `occupied` says which workspaces have a window on them, so the bar shows where
+ * your work is rather than only where you are, and `count` is how many there
+ * are. `clock` is the time of day, or NULL when the chip would not answer, in
+ * which case the bar shows the uptime instead. A bar that invented a time would
+ * be worse than one saying how long the machine has been up, which is true. */
 void shell_top_bar(struct surface *desktop, const struct theme *theme,
                    int64_t width, int64_t height,
-                   int64_t workspace, const char *focused,
+                   int64_t workspace, const bool *occupied, int64_t count,
+                   const char *focused,
                    const char *clock, uint64_t uptime_seconds);
 
 /* One entry on the taskbar. */
@@ -91,6 +95,9 @@ struct shell_task {
     const char *name;
     bool focused;
     bool hidden;
+    /* On a workspace other than the one being looked at. Shown dimmed rather
+     * than left out, so a window is never somewhere a person cannot find. */
+    bool elsewhere;
 };
 
 /* The bottom taskbar: the launcher, then one button per window. */

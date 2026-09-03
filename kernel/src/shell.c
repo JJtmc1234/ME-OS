@@ -199,7 +199,8 @@ static uint64_t put_text(char *out, uint64_t capacity, uint64_t at, const char *
 
 void shell_top_bar(struct surface *desktop, const struct theme *theme,
                    int64_t width, int64_t height,
-                   int64_t workspace, const char *focused,
+                   int64_t workspace, const bool *occupied, int64_t count,
+                   const char *focused,
                    const char *clock, uint64_t uptime_seconds)
 {
     if (!surface_valid(desktop) || theme == NULL || height <= 0) {
@@ -215,14 +216,28 @@ void shell_top_bar(struct surface *desktop, const struct theme *theme,
     surface_draw_string(desktop, "ME OS", x, text_y, theme->bar_text, 1);
     x += 6 * FONT_WIDTH + BAR_PAD * 2;
 
-    /* The workspace, then what has focus. The order is deliberate: where you are
-     * comes before what you are doing. */
+    /* Every workspace, not only the one you are on. The one you are looking at
+     * is the accent, one with windows on it is readable, and an empty one is
+     * dim, so where your work is takes no clicking to find out. The order is
+     * deliberate: where you are comes before what you are doing. */
     char line[64];
-    uint64_t n = put_text(line, sizeof line, 0, "WS ");
-    n += put_number(line + n, sizeof line - n, (uint64_t)(workspace < 0 ? 0 : workspace));
-    line[n] = '\0';
-    surface_draw_string(desktop, line, x, text_y, theme->accent, 1);
-    x += (int64_t)(n + 2) * FONT_WIDTH;
+    for (int64_t i = 1; i <= count; i++) {
+        uint64_t n = put_number(line, sizeof line, (uint64_t)i);
+        line[n] = '\0';
+        const bool here = i == workspace;
+        const bool has = occupied != NULL && occupied[i - 1];
+        surface_draw_string(desktop, line, x, text_y,
+                            here ? theme->accent
+                                 : (has ? theme->bar_text : theme->bar_dim), 1);
+        if (here) {
+            /* A line under the one you are on, so it is still obvious in a
+             * photograph or to somebody who cannot pick the colour out. */
+            surface_fill_rect(desktop, x, text_y + FONT_HEIGHT + 1,
+                              FONT_WIDTH, 1, theme->accent);
+        }
+        x += FONT_WIDTH + 4;
+    }
+    x += BAR_PAD;
 
     if (focused != NULL) {
         surface_draw_string(desktop, focused, x, text_y, theme->bar_text, 1);
@@ -231,6 +246,7 @@ void shell_top_bar(struct surface *desktop, const struct theme *theme,
     /* The time of day on the right when there is one, and the uptime when the
      * clock chip would not answer. Inventing a time would be worse than saying
      * how long the machine has been up, which is true and which this knows. */
+    uint64_t n;
     if (clock != NULL && clock[0] != '\0') {
         n = put_text(line, sizeof line, 0, clock);
     } else {
@@ -320,15 +336,18 @@ void shell_taskbar(struct surface *desktop, const struct theme *theme,
             surface_fill_rect(desktop, button.x, button.y,
                               (uint32_t)button.width, 2, theme->accent);
         }
+        /* Dimmed when it is hidden or on another workspace, because both mean
+         * the same thing to somebody looking for it: not on this screen. */
+        const bool away = tasks[i].hidden || tasks[i].elsewhere;
         shell_icon(desktop, button.x + 5,
                    button.y + (button.height - SHELL_ICON_SIZE) / 2,
                    SHELL_ICON_SIZE,
-                   tasks[i].hidden ? theme->bar_dim : theme->accent, theme->chrome);
+                   away ? theme->bar_dim : theme->accent, theme->chrome);
         if (tasks[i].name != NULL) {
             surface_draw_string(desktop, tasks[i].name,
                                 button.x + 5 + SHELL_ICON_SIZE + 5,
                                 button.y + (button.height - FONT_HEIGHT) / 2,
-                                tasks[i].hidden ? theme->bar_dim : theme->bar_text, 1);
+                                away ? theme->bar_dim : theme->bar_text, 1);
         }
     }
 }

@@ -24,6 +24,10 @@
 #include "window.h"
 
 #define DESKTOP_MAX_APPS 5
+/* How many sets of tiles there are. Four, because that is as many as anybody
+ * keeps in their head, and because the keyboard has to reach each one with a
+ * single key. */
+#define DESKTOP_WORKSPACES 4
 
 struct desktop_app {
     WindowId id;
@@ -38,6 +42,11 @@ struct desktop_app {
     /* Out of the layout and still on the taskbar. A hidden window takes no tile
      * space, which is the whole reason to hide one. */
     bool hidden;
+    /* Which set of tiles it belongs to, from one. A window on another workspace
+     * is as absent from this one as a hidden window is, and it is a different
+     * kind of absent: hiding is about this screen, a workspace is about which
+     * screen you are looking at. */
+    int64_t workspace;
 };
 
 struct desktop {
@@ -74,9 +83,30 @@ size_t desktop_index_of(const struct desktop *desktop, WindowId id);
 struct desktop_app *desktop_app_at(struct desktop *desktop, size_t index);
 size_t desktop_visible_count(const struct desktop *desktop);
 
+/* Whether this app is on the screen right now: not hidden, and on the workspace
+ * being looked at. The one place that answer is worked out. */
+bool desktop_on_screen(const struct desktop *desktop, size_t index);
+
+/* Changes which set of tiles is on screen. The caller lays out afterwards, and
+ * the layout is what moves focus onto something visible. False when the number
+ * names no workspace or is the one already being looked at. */
+bool desktop_switch_workspace(struct desktop *desktop, int64_t to);
+
+/* Sends a window to another workspace, leaving you where you are. Moving a
+ * window away and following it are two different wishes, and this is the one
+ * that lets a workspace be cleared. */
+bool desktop_move_to_workspace(struct desktop *desktop, WindowId id, int64_t to);
+
+/* Whether any window lives on that workspace, so the bar can show which of them
+ * have something on them. */
+bool desktop_workspace_occupied(const struct desktop *desktop, int64_t which);
+
 /* Recomputes every tile, resizes every visible window's surface and rebuilds
  * every client view. False means the screen cannot hold what is visible, and
- * nothing has been changed. */
+ * nothing has been changed.
+ *
+ * Focus settles here too, onto something on the screen, because this is the one
+ * place that knows what is on it afterwards. */
 bool desktop_relayout(struct desktop *desktop);
 
 /* Paints every visible frame: ground, title strip, buttons, border. The client

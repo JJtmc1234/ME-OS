@@ -720,9 +720,11 @@ static void read_memory_map(void)
 
 static struct surface *terminal_client(void)
 {
-    struct desktop_app *app =
-        desktop_app_at(&desktop, desktop_index_of(&desktop, terminal_window_id));
-    return app == NULL || app->hidden ? NULL : &app->client;
+    const size_t index = desktop_index_of(&desktop, terminal_window_id);
+    if (!desktop_on_screen(&desktop, index)) {
+        return NULL;
+    }
+    return &desktop_app_at(&desktop, index)->client;
 }
 
 static void terminal_paint(void)
@@ -825,9 +827,11 @@ static void refresh_focus(void);
 
 static struct surface *editor_client(void)
 {
-    struct desktop_app *app =
-        desktop_app_at(&desktop, desktop_index_of(&desktop, editor_window_id));
-    return app == NULL || app->hidden ? NULL : &app->client;
+    const size_t index = desktop_index_of(&desktop, editor_window_id);
+    if (!desktop_on_screen(&desktop, index)) {
+        return NULL;
+    }
+    return &desktop_app_at(&desktop, index)->client;
 }
 
 static void editor_paint(void)
@@ -960,8 +964,18 @@ static void log_layout(void)
             window_get_const(&window_manager, app->id);
         log_str("me-os: tile ");
         log_str(app->title);
-        if (app->hidden || window == NULL) {
-            log_str(" hidden\n");
+        /* A window that is not on the screen has no tile, and says so rather
+         * than reporting the rectangle it held last time. That rectangle
+         * belongs to a different window now, and printing it would have this
+         * one claiming room it does not own. */
+        if (window == NULL || !desktop_on_screen(&desktop, i)) {
+            if (app->hidden) {
+                log_str(" hidden\n");
+            } else {
+                log_str(" on workspace ");
+                log_dec((uint64_t)app->workspace);
+                log_str("\n");
+            }
             continue;
         }
         log_str(" at ");
@@ -1197,6 +1211,8 @@ static void paint_about(struct surface *client)
         "CTRL H        HIDE THIS WINDOW",
         "CTRL S        SHOW EVERY WINDOW",
         "CTRL N AND W  MOVE THE DIVIDER",
+        "CTRL 1 TO 4   GO TO A WORKSPACE",
+        "CTRL M        SEND THIS ONE ALONG",
         "",
         "TYPE HELP IN THE TERMINAL.",
     };
@@ -1212,7 +1228,7 @@ static void paint_about(struct surface *client)
 static void paint_app(size_t index)
 {
     struct desktop_app *app = desktop_app_at(&desktop, index);
-    if (app == NULL || app->hidden) {
+    if (app == NULL || !desktop_on_screen(&desktop, index)) {
         return;
     }
     if (index == 1) {
@@ -1230,7 +1246,9 @@ static void paint_app(size_t index)
 static void paint_info_apps(void)
 {
     for (size_t i = 1; i < desktop.app_count; i++) {
-        paint_app(i);
+        if (desktop_on_screen(&desktop, i)) {
+            paint_app(i);
+        }
     }
 }
 
@@ -1254,8 +1272,14 @@ static void relayout_desktop(void)
     presenting_suppressed = true;
     desktop_paint_frames(&desktop);
     paint_info_apps();
-    demo_layout();
-    demo_repaint();
+    /* Only when Demo is on the screen. Its surface is emptied when it is not,
+     * so this would be a long series of no operations, and laying it out
+     * against a surface with no size would leave nonsense behind for when it
+     * comes back. */
+    if (desktop_on_screen(&desktop, 0)) {
+        demo_layout();
+        demo_repaint();
+    }
     presenting_suppressed = false;
 
     present_desktop();
@@ -1322,6 +1346,18 @@ static bool handle_shortcut(const struct kbd_key *key)
         return true;
     }
 
+    /* A digit goes to that workspace. One key each, which is why there are four
+     * of them and not more. */
+    if (key->ch >= '1' && key->ch <= '0' + DESKTOP_WORKSPACES) {
+        if (desktop_switch_workspace(&desktop, key->ch - '0')) {
+            log_str("me-os: workspace ");
+            log_dec((uint64_t)desktop.workspace);
+            log_str("\n");
+            relayout_desktop();
+        }
+        return true;
+    }
+
     switch (key->ch) {
     case 'H':
         /* Out of the layout, still on the taskbar. The others grow into the
@@ -1343,6 +1379,21 @@ static bool handle_shortcut(const struct kbd_key *key)
         }
         if (any) {
             log_stage("hidden windows shown, the layout reflowed");
+            relayout_desktop();
+        }
+        return true;
+    }
+
+    case 'M': {
+        /* Sends the focused window to the next workspace and stays where you
+         * are. Moving a window away and following it are two different wishes,
+         * and this is the one that lets a workspace be cleared. */
+        const int64_t next = desktop.workspace % DESKTOP_WORKSPACES + 1;
+        if (desktop_move_to_workspace(&desktop, window_focused(&window_manager),
+                                      next)) {
+            log_str("me-os: window moved to workspace ");
+            log_dec((uint64_t)next);
+            log_str("\n");
             relayout_desktop();
         }
         return true;
@@ -1497,8 +1548,11 @@ static bool desktop_press(int64_t x, int64_t y)
         const size_t entry = launcher_entry_at(x, y);
         close_launcher();
         if (entry < desktop.app_count) {
-            const WindowId id = desktop_app_at(&desktop, entry)->id;
-            if (desktop_set_hidden(&desktop, id, false)) {
+            const struct desktop_app *app = desktop_app_at(&desktop, entry);
+            const WindowId id = app->id;
+            bool moved = desktop_set_hidden(&desktop, id, false);
+            moved = desktop_switch_workspace(&desktop, app->workspace) || moved;
+            if (moved) {
                 relayout_desktop();
             }
             window_focus(&window_manager, id, false);
@@ -1521,10 +1575,14 @@ static bool desktop_press(int64_t x, int64_t y)
 
     const size_t task = desktop_taskbar_hit(&desktop, x, y);
     if (task < desktop.app_count) {
-        const WindowId id = desktop_app_at(&desktop, task)->id;
-        /* A hidden window comes back. A showing one takes focus. That is one
-         * button doing the obvious thing in both states rather than two. */
-        if (desktop_set_hidden(&desktop, id, false)) {
+        const struct desktop_app *app = desktop_app_at(&desktop, task);
+        const WindowId id = app->id;
+        /* One button doing the obvious thing whatever state the window is in.
+         * A hidden one comes back, one on another workspace takes you there,
+         * and one already on screen simply takes focus. */
+        bool moved = desktop_set_hidden(&desktop, id, false);
+        moved = desktop_switch_workspace(&desktop, app->workspace) || moved;
+        if (moved) {
             relayout_desktop();
         }
         window_focus(&window_manager, id, false);
@@ -1808,7 +1866,7 @@ void kmain(void)
              * as the bar that reports it. A window showing a clock that stopped
              * at boot is worse than one with no clock in it. */
             struct desktop_app *info = desktop_app_at(&desktop, 1);
-            if (info != NULL && !info->hidden) {
+            if (info != NULL && desktop_on_screen(&desktop, 1)) {
                 surface_fill_rect(&info->client, 0, 0, info->client.width,
                                   info->client.height, desktop.theme.window);
                 paint_app(1);
@@ -1832,11 +1890,16 @@ void kmain(void)
             log_str("\n");
         }
 
-        if (rect_advance(&rect_state, elapsed, TIMER_HZ, demo_surface.width)) {
-            draw_rect();
-        }
-        if (fpu_ready() && triangle_advance(elapsed, TIMER_HZ)) {
-            redraw_triangle();
+        /* Demo animates only while it is on the screen. Its surface is emptied
+         * when it is not, so drawing would be harmless, and there is no reason
+         * to spend the time working out a picture nobody can see. */
+        if (desktop_on_screen(&desktop, 0)) {
+            if (rect_advance(&rect_state, elapsed, TIMER_HZ, demo_surface.width)) {
+                draw_rect();
+            }
+            if (fpu_ready() && triangle_advance(elapsed, TIMER_HZ)) {
+                redraw_triangle();
+            }
         }
 
         /* Every packet the controller is holding, not one of them.

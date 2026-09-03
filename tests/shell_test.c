@@ -132,7 +132,9 @@ static void test_the_bars_stay_in_their_own_strips(void)
     surface_clear(&desktop, 0x00FF00u);
 
     const struct theme theme = theme_default(rgb);
-    shell_top_bar(&desktop, &theme, width, top_height, 1, "DEMO", "12:34:56", 125);
+    const bool occupied[4] = { true, true, false, false };
+    shell_top_bar(&desktop, &theme, width, top_height, 1, occupied, 4, "DEMO",
+                  "12:34:56", 125);
 
     bool below_untouched = true;
     for (int64_t y = top_height; y < height; y++) {
@@ -145,9 +147,9 @@ static void test_the_bars_stay_in_their_own_strips(void)
     check(below_untouched, "the top bar left everything below it alone");
 
     const struct shell_task tasks[] = {
-        { "DEMO", true, false },
-        { "SYSTEM INFO", false, false },
-        { "ABOUT", false, true },
+        { "DEMO", true, false, false },
+        { "SYSTEM INFO", false, false, true },
+        { "ABOUT", false, true, false },
     };
     shell_taskbar(&desktop, &theme, width, height, bottom_height, tasks, 3);
 
@@ -164,10 +166,10 @@ static void test_the_bars_stay_in_their_own_strips(void)
 
     printf("more tasks than fit are dropped rather than drawn off the edge\n");
     const struct shell_task many[] = {
-        { "ONE", false, false },   { "TWO", false, false },
-        { "THREE", false, false }, { "FOUR", false, false },
-        { "FIVE", false, false },  { "SIX", false, false },
-        { "SEVEN", false, false }, { "EIGHT", false, false },
+        { "ONE", false, false, false },   { "TWO", false, false, false },
+        { "THREE", false, false, false }, { "FOUR", false, false, false },
+        { "FIVE", false, false, false },  { "SIX", false, false, false },
+        { "SEVEN", false, false, false }, { "EIGHT", false, false, false },
     };
     shell_taskbar(&desktop, &theme, width, height, bottom_height, many, 8);
     check(guards_intact(storage, 320 * 200), "eight tasks on a narrow bar stay inside");

@@ -446,6 +446,56 @@ control combination, which meant no app could ever have one. It now takes only
 the ones it uses and passes the rest to whatever has focus, which is how Ctrl O
 reaches the editor.
 
+## M22 four workspaces, and the bug that made them necessary
+
+Done. Ctrl 1 to Ctrl 4 go to a workspace. Ctrl M sends the focused window to the
+next one and leaves you where you are, because moving a window away and
+following it are two different wishes, and only the first can clear a screen.
+
+Five windows on a 1024 by 768 screen is five tiles none of which is big enough
+to work in. A tiling desktop answers that with workspaces rather than with
+overlapping windows, and this is that answer.
+
+**A workspace is a different kind of absent from a hidden window.** Hiding is
+about this screen. A workspace is about which screen you are looking at. Both
+end up meaning "not drawn" to the compositor, so both set the same flag, and one
+function, `desktop_on_screen`, is the only place that works the answer out.
+Before this there were four places asking `app->hidden` directly and each one
+would have needed the workspace test adding to it.
+
+**The top bar shows every workspace, not only the one you are on.** The one you
+are looking at is the accent colour and carries a line under it. One with
+windows on it is readable. An empty one is dim. Where your work is takes no
+clicking to find out, and the underline means it still reads correctly in a
+photograph or to somebody who cannot pick the colour out.
+
+**The taskbar shows every window on every workspace**, dimmed when it is not on
+this screen. That is what made it safe to allow an empty workspace, which used
+to be refused: a desktop with nothing on it and no way back is not a state worth
+reaching with one key, and now there is a way back.
+
+**Focus settles in one place.** `desktop_relayout` is the only function that
+knows which windows are on the screen after it runs, so it is the only one that
+moves focus. Switching workspace, hiding a window and moving one all change that
+set, and each deciding focus for itself is three chances to leave the keyboard
+talking to a window nobody can see.
+
+**The bug.** The tiles share one arena, handed out in layout order. That is what
+makes them cheap and it is why they cannot overlap. It also means the slice a
+window held is given to a different window the moment it leaves the screen, and
+an app that kept drawing into its old surface was writing into somebody else's
+tile. It showed up as one window's picture smeared across a third one, which is
+what the screenshot showed.
+
+The fix is to empty the surface rather than to remember not to draw. An emptied
+surface fails `surface_valid`, so every drawing call on it becomes a no
+operation. That is one guard in one place instead of a check every app has to
+remember, and forgetting it is exactly what happened.
+
+The test does what the app was doing. It draws through every surface call an app
+could make on a surface it no longer owns, then checks the window that stayed is
+pixel for pixel as it was. Without the fix it fails.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -457,7 +507,7 @@ reaches the editor.
 
 ## Verification status
 
-M1 to M21 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M22 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

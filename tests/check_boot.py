@@ -292,11 +292,16 @@ def parse_layouts() -> list[list[Tile]]:
             close()
             continue
         body = line[len("me-os: tile "):]
-        title = body.split(" at ")[0].split(" hidden")[0].strip()
+        # A window with no rectangle is not on the screen: hidden, or on another
+        # workspace. It still starts a new run, because the kernel prints every
+        # window each time, but there is nothing to check it against.
+        on_screen = " at " in body
+        title = (body.split(" at ")[0].split(" hidden")[0]
+                     .split(" on workspace")[0].strip())
         if title in seen:
             close()
         seen.add(title)
-        if body.endswith(" hidden"):
+        if not on_screen:
             continue
         try:
             head, rest = body.split(" at ", 1)
@@ -487,6 +492,52 @@ def check_clock() -> list[str]:
     if "clock chip would not answer" not in text:
         raise CheckFailed("the kernel neither read the clock nor said it could not")
     return ["M21 clock: the chip would not answer, and the bar says uptime instead"]
+
+
+def check_workspaces() -> list[str]:
+    """M22: windows really moved to another set of tiles, and it was looked at.
+
+    Checked by the layouts either side of the switch. A window that left this
+    workspace has to be absent from the layout afterwards, and present again in
+    the one taken after the switch, or nothing moved and only a number changed.
+    """
+    runs = parse_layouts()
+    names = [{tile.title for tile in run} for run in runs]
+
+    moved_away = False
+    for before, after in zip(names, names[1:]):
+        if after < before:
+            moved_away = True
+            break
+    if not moved_away:
+        raise CheckFailed(
+            "no layout ever held fewer windows than the one before it, so "
+            "nothing was moved off the screen")
+
+    text = DEBUG_LOG.read_text(errors="ignore")
+    switched = [line for line in text.splitlines()
+                if line.startswith("me-os: workspace ")]
+    if not switched:
+        raise CheckFailed("the desktop never changed workspace")
+
+    # Direct evidence rather than a count. A window that reports itself on
+    # another workspace really left this screen, and a count could be explained
+    # by a window that was merely hidden.
+    elsewhere = [line for line in text.splitlines()
+                 if line.startswith("me-os: tile ") and " on workspace " in line]
+    if not elsewhere:
+        raise CheckFailed(
+            "no window ever reported itself on another workspace, so the "
+            "windows stayed where they were and only a number changed")
+
+    # The layout after the switch has to be the windows that were sent there,
+    # not the ones that stayed, or switching showed the wrong screen.
+    final = names[-1]
+    if not final:
+        raise CheckFailed("the workspace switched to had nothing on it")
+
+    return [f"M22 workspaces: {len(switched)} switch(es), and the layout after "
+            f"one holds {', '.join(sorted(final))}"]
 
 
 def check_tiles_on_screen(path: Path) -> list[str]:
@@ -840,6 +891,8 @@ def check_log() -> list[str]:
         "terminal ran CAT PROJECTS/NOTE.TXT",
         "editor opened TODO.TXT",
         "editor saved TODO.TXT",
+        "window moved to workspace ",
+        "workspace 2",
         "floating point ready, drew the M12 triangle",
         f"key {KEY_SENT}",
         "sum 12+30 = 42",
@@ -1257,6 +1310,7 @@ def main() -> int:
         notes += check_terminal()
         notes += check_editor()
         notes += check_clock()
+        notes += check_workspaces()
         notes += check_tiles_on_screen(SCREEN_FOCUS_SYSTEM)
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -1264,13 +1318,13 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M21 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M22 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
           "presented through dirty regions rather than whole screen repaints, "
-          "tiled into a desktop with a shell, an editor and a clock")
+          "tiled into a desktop with workspaces, a shell, an editor and a clock")
     print("A person should still watch it boot once with make run.")
     return 0
 

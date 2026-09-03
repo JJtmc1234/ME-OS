@@ -420,6 +420,16 @@ rectangle_centre() {
     type_line "wc todo.txt"
     type_line "date"
     sleep 2
+
+    # M22. Send two windows to the next workspace and go and look at them. The
+    # last capture is taken there, so the final layout in the log and the final
+    # screenshot are the same set of windows.
+    echo "sendkey ctrl-m"
+    sleep 1
+    echo "sendkey ctrl-m"
+    sleep 1
+    echo "sendkey ctrl-2"
+    sleep 2
     echo "screendump $SHOT_FOCUS_SYSTEM"
     sleep 2
     sleep 2

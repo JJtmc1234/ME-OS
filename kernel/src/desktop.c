@@ -44,6 +44,7 @@ size_t desktop_add(struct desktop *desktop, const char *title)
     app->id = id;
     app->title = title;
     app->hidden = false;
+    app->workspace = desktop->workspace;
     return index;
 }
 
@@ -68,18 +69,57 @@ struct desktop_app *desktop_app_at(struct desktop *desktop, size_t index)
     return &desktop->apps[index];
 }
 
+bool desktop_on_screen(const struct desktop *desktop, size_t index)
+{
+    if (desktop == NULL || index >= desktop->app_count) {
+        return false;
+    }
+    const struct desktop_app *app = &desktop->apps[index];
+    return !app->hidden && app->workspace == desktop->workspace;
+}
+
 size_t desktop_visible_count(const struct desktop *desktop)
 {
-    if (desktop == NULL) {
-        return 0;
-    }
     size_t visible = 0;
-    for (size_t i = 0; i < desktop->app_count; i++) {
-        if (!desktop->apps[i].hidden) {
+    for (size_t i = 0; desktop != NULL && i < desktop->app_count; i++) {
+        if (desktop_on_screen(desktop, i)) {
             visible++;
         }
     }
     return visible;
+}
+
+bool desktop_workspace_occupied(const struct desktop *desktop, int64_t which)
+{
+    for (size_t i = 0; desktop != NULL && i < desktop->app_count; i++) {
+        if (desktop->apps[i].workspace == which && !desktop->apps[i].hidden) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool desktop_switch_workspace(struct desktop *desktop, int64_t to)
+{
+    if (desktop == NULL || to < 1 || to > DESKTOP_WORKSPACES ||
+        to == desktop->workspace) {
+        return false;
+    }
+    desktop->workspace = to;
+    return true;
+}
+
+bool desktop_move_to_workspace(struct desktop *desktop, WindowId id, int64_t to)
+{
+    if (desktop == NULL || to < 1 || to > DESKTOP_WORKSPACES) {
+        return false;
+    }
+    const size_t index = desktop_index_of(desktop, id);
+    if (index >= desktop->app_count || desktop->apps[index].workspace == to) {
+        return false;
+    }
+    desktop->apps[index].workspace = to;
+    return true;
 }
 
 bool desktop_relayout(struct desktop *desktop)
@@ -91,7 +131,7 @@ bool desktop_relayout(struct desktop *desktop)
     size_t order[DESKTOP_MAX_APPS];
     size_t visible = 0;
     for (size_t i = 0; i < desktop->app_count; i++) {
-        if (!desktop->apps[i].hidden) {
+        if (desktop_on_screen(desktop, i)) {
             order[visible++] = i;
         }
     }
@@ -119,7 +159,23 @@ bool desktop_relayout(struct desktop *desktop)
             return false;
         }
         window_attach_surface(desktop->windows, desktop->apps[i].id, NULL);
-        window->minimized = desktop->apps[i].hidden;
+        /* Minimized to the compositor means "do not draw this", which is true
+         * of a hidden window and equally true of one on another workspace. */
+        window->minimized = !desktop_on_screen(desktop, i);
+
+        /* And its surfaces are emptied, which is the important half.
+         *
+         * The tiles share one arena, handed out in layout order, so the slice a
+         * window had is given to a different window the moment it leaves the
+         * screen. An app that kept drawing into its old surface would then be
+         * writing into somebody else's tile, and the first sign of it is
+         * another window's picture smeared across a third one. An emptied
+         * surface fails `surface_valid`, so every drawing call on it becomes a
+         * no operation rather than corruption somewhere else. */
+        if (window->minimized) {
+            desktop->apps[i].frame = (struct surface){0};
+            desktop->apps[i].client = (struct surface){0};
+        }
     }
 
     /* Handed out in layout order, so a tile always gets a slice that starts
@@ -161,6 +217,21 @@ bool desktop_relayout(struct desktop *desktop)
             return false;
         }
     }
+
+    /* Focus settles here, and only here, because this is the one place that
+     * knows which windows are on the screen afterwards. Switching workspace,
+     * hiding a window and closing one all change that set, and each deciding
+     * focus for itself is three chances to leave the keyboard talking to a
+     * window nobody can see. */
+    const size_t focused = desktop_index_of(desktop, window_focused(desktop->windows));
+    if (focused >= desktop->app_count || !desktop_on_screen(desktop, focused)) {
+        for (size_t i = 0; i < desktop->app_count; i++) {
+            if (desktop_on_screen(desktop, i)) {
+                window_focus(desktop->windows, desktop->apps[i].id, false);
+                break;
+            }
+        }
+    }
     return true;
 }
 
@@ -172,7 +243,7 @@ void desktop_paint_frames(struct desktop *desktop)
     const WindowId focused = window_focused(desktop->windows);
     for (size_t i = 0; i < desktop->app_count; i++) {
         struct desktop_app *app = &desktop->apps[i];
-        if (app->hidden) {
+        if (!desktop_on_screen(desktop, i)) {
             continue;
         }
         shell_frame(&app->frame, &desktop->theme, app->title,
@@ -207,15 +278,21 @@ void desktop_draw_bars(struct desktop *desktop, struct surface *target,
     const size_t index = desktop_index_of(desktop, focused);
     const char *name = index < desktop->app_count ? desktop->apps[index].title : "";
 
+    bool occupied[DESKTOP_WORKSPACES];
+    for (int64_t i = 0; i < DESKTOP_WORKSPACES; i++) {
+        occupied[i] = desktop_workspace_occupied(desktop, i + 1);
+    }
+
     shell_top_bar(target, &desktop->theme, desktop->screen_width,
-                  desktop->layout.top_bar, desktop->workspace, name,
-                  clock, uptime_seconds);
+                  desktop->layout.top_bar, desktop->workspace, occupied,
+                  DESKTOP_WORKSPACES, name, clock, uptime_seconds);
 
     struct shell_task tasks[DESKTOP_MAX_APPS];
     for (size_t i = 0; i < desktop->app_count; i++) {
         tasks[i].name = desktop->apps[i].title;
         tasks[i].focused = desktop->apps[i].id == focused;
         tasks[i].hidden = desktop->apps[i].hidden;
+        tasks[i].elsewhere = desktop->apps[i].workspace != desktop->workspace;
     }
     shell_taskbar(target, &desktop->theme, desktop->screen_width,
                   desktop->screen_height, desktop->layout.bottom_bar,
@@ -275,7 +352,7 @@ bool desktop_focus_step(struct desktop *desktop, int step)
         } else {
             at = (at + desktop->app_count - 1) % desktop->app_count;
         }
-        if (!desktop->apps[at].hidden) {
+        if (desktop_on_screen(desktop, at)) {
             /* Without raising. Tiles do not overlap, so the z-order says nothing
              * about what a person can see, and reordering it on every focus
              * change would make the compositor redraw for no visible reason. */
@@ -294,12 +371,10 @@ bool desktop_set_hidden(struct desktop *desktop, WindowId id, bool hidden)
     if (index >= desktop->app_count) {
         return false;
     }
-    /* The last visible window does not get to hide. A desktop with nothing on
-     * it and no way to get anything back is not a state worth being able to
-     * reach with one key. */
-    if (hidden && desktop_visible_count(desktop) <= 1) {
-        return false;
-    }
+    /* An empty workspace is allowed now. It used to be refused, because a
+     * desktop with nothing on it and no way back is not a state worth reaching
+     * with one key, and there is a way back: the taskbar shows every window on
+     * every workspace and the launcher opens them. */
     if (desktop->apps[index].hidden == hidden) {
         return false;
     }

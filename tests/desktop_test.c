@@ -154,13 +154,17 @@ static void test_hiding_reflows_and_frees_the_space(void)
     check(desktop_visible_count(&desktop) == 3, "three visible again");
     check(overlapping_pixels() == 0, "with nothing overlapping");
 
-    printf("the last visible window is not allowed to hide\n");
+    /* An empty workspace used to be refused, on the grounds that a desktop with
+     * nothing on it and no way back is not worth reaching with one key. There is
+     * a way back now: the taskbar shows every window on every workspace. */
+    printf("hiding everything leaves an empty workspace, not a broken one\n");
     check(desktop_set_hidden(&desktop, desktop.apps[0].id, true), "hide one");
     check(desktop_set_hidden(&desktop, desktop.apps[1].id, true), "hide another");
-    check(desktop_visible_count(&desktop) == 1, "one is left");
-    check(!desktop_set_hidden(&desktop, desktop.apps[3].id, true),
-          "and hiding it is refused");
-    check(desktop_visible_count(&desktop) == 1, "so something is still on screen");
+    check(desktop_set_hidden(&desktop, desktop.apps[3].id, true), "and the last");
+    check(desktop_visible_count(&desktop) == 0, "nothing is on screen");
+    check(desktop_relayout(&desktop), "and laying out an empty screen succeeds");
+    check(desktop_set_hidden(&desktop, desktop.apps[0].id, false), "one comes back");
+    check(desktop_visible_count(&desktop) == 1, "and it is on screen again");
 }
 
 static void test_the_client_view_shares_the_frame(void)
@@ -321,6 +325,131 @@ static void test_nonsense_is_refused(void)
     check(!desktop_focus_step(&desktop, 0), "a step of nowhere is refused");
 }
 
+/* M22. A workspace is a different kind of absent from a hidden window: hiding is
+ * about this screen, a workspace is about which screen you are looking at. */
+static void test_workspaces(void)
+{
+    printf("windows start on the workspace that was current when they were made\n");
+    build(4);
+    check(desktop.workspace == 1, "the desktop starts on the first");
+    check(desktop_visible_count(&desktop) == 4, "with everything on it");
+    check(desktop_workspace_occupied(&desktop, 1), "the first has windows");
+    check(!desktop_workspace_occupied(&desktop, 2), "and the second has none");
+
+    printf("moving a window takes it off this screen without hiding it\n");
+    check(desktop_move_to_workspace(&desktop, desktop.apps[3].id, 2), "move one");
+    check(desktop_visible_count(&desktop) == 3, "three are left here");
+    check(!desktop.apps[3].hidden, "and the one that left is not hidden");
+    check(desktop_workspace_occupied(&desktop, 2), "the second workspace has it");
+    check(desktop_relayout(&desktop), "the rest lay out again");
+    check(overlapping_pixels() == 0, "with nothing overlapping");
+
+    const struct window *gone = window_get_const(&windows, desktop.apps[3].id);
+    check(gone->minimized, "the compositor is told not to draw it");
+
+    printf("switching workspace changes which windows are on screen\n");
+    check(desktop_switch_workspace(&desktop, 2), "go to the second");
+    check(desktop_relayout(&desktop), "and lay the new screen out");
+    check(desktop_visible_count(&desktop) == 1, "one window is there");
+    check(desktop_on_screen(&desktop, 3), "and it is the one that was moved");
+    check(!desktop_on_screen(&desktop, 0), "the others are not");
+    const struct window *alone = window_get_const(&windows, desktop.apps[3].id);
+    check(!alone->minimized, "and is drawn now");
+
+    printf("focus follows, because focus on a window nobody sees types into the void\n");
+    check(window_focused(&windows) == desktop.apps[3].id, "focus is on the visible one");
+    check(desktop_switch_workspace(&desktop, 1), "back to the first");
+    check(desktop_relayout(&desktop), "and lay it out");
+    check(desktop_on_screen(&desktop, desktop_index_of(&desktop,
+                                                       window_focused(&windows))),
+          "and focus landed on something on this screen");
+
+    printf("moving the focused window away moves focus to something still here\n");
+    window_focus(&windows, desktop.apps[0].id, false);
+    check(desktop_move_to_workspace(&desktop, desktop.apps[0].id, 3), "move it away");
+    check(desktop_relayout(&desktop), "and lay out");
+    check(window_focused(&windows) != desktop.apps[0].id, "focus left with it");
+    check(desktop_on_screen(&desktop, desktop_index_of(&desktop,
+                                                       window_focused(&windows))),
+          "onto a window that is on screen");
+
+    printf("an empty workspace is a real state rather than a fault\n");
+    build(1);
+    check(desktop_move_to_workspace(&desktop, desktop.apps[0].id, 4), "send the only one away");
+    check(desktop_visible_count(&desktop) == 0, "this workspace is empty");
+    check(desktop_relayout(&desktop), "and laying it out succeeds");
+    check(desktop_switch_workspace(&desktop, 4), "following it");
+    check(desktop_relayout(&desktop), "and laying that out");
+    check(desktop_visible_count(&desktop) == 1, "finds it there");
+
+    printf("a workspace that does not exist is refused\n");
+    build(2);
+    check(!desktop_switch_workspace(&desktop, 0), "there is no workspace zero");
+    check(!desktop_switch_workspace(&desktop, DESKTOP_WORKSPACES + 1), "nor one past the last");
+    check(!desktop_switch_workspace(&desktop, 1), "nor a move to the one you are on");
+    check(!desktop_move_to_workspace(&desktop, desktop.apps[0].id, 99), "nor a move to nowhere");
+    check(!desktop_move_to_workspace(&desktop, WINDOW_ID_NONE, 2), "nor of nothing");
+    check(!desktop_switch_workspace(NULL, 2), "and no desktop switches nowhere");
+    check(desktop.workspace == 1, "so the desktop stayed where it was");
+}
+
+/* The bug this exists for. The tiles share one arena, handed out in layout
+ * order, so the slice a window had is given to a different window the moment it
+ * leaves the screen. An app that kept drawing into its old surface was writing
+ * into somebody else's tile, and it showed up as one window's picture smeared
+ * across a third one.
+ *
+ * Checked by doing exactly what the app was doing: drawing into the surface it
+ * held before it went away, and looking at whether anybody else changed.
+ */
+static void test_an_offscreen_window_cannot_draw_into_another(void)
+{
+    printf("a window that leaves the screen has its surface emptied\n");
+    build(4);
+    struct desktop_app *leaving = desktop_app_at(&desktop, 0);
+    check(surface_valid(&leaving->client), "it has a real surface while on screen");
+
+    check(desktop_move_to_workspace(&desktop, leaving->id, 2), "send it away");
+    check(desktop_relayout(&desktop), "and lay the rest out");
+    check(!surface_valid(&leaving->client), "its client is emptied");
+    check(!surface_valid(&leaving->frame), "and so is its frame");
+
+    printf("so drawing into it changes nothing anywhere\n");
+    struct desktop_app *staying = desktop_app_at(&desktop, 1);
+    surface_clear(&staying->client, 0x00FF00u);
+
+    /* Every call an app might make on a surface it no longer owns. */
+    surface_clear(&leaving->client, 0xFF0000u);
+    surface_fill_rect(&leaving->client, 0, 0, 4000, 4000, 0xFF0000u);
+    surface_draw_line(&leaving->client, -100, -100, 4000, 4000, 0xFF0000u);
+    surface_draw_string(&leaving->client, "SMEAR", 0, 0, 0xFF0000u, 4);
+    surface_put_pixel(&leaving->client, 10, 10, 0xFF0000u);
+
+    bool untouched = true;
+    for (uint32_t y = 0; y < staying->client.height; y++) {
+        for (uint32_t x = 0; x < staying->client.width; x++) {
+            if (surface_pixel(&staying->client, x, y) != 0x00FF00u) {
+                untouched = false;
+            }
+        }
+    }
+    check(untouched, "the window that stayed is exactly as it was");
+
+    printf("and it gets a real surface again when it comes back\n");
+    check(desktop_switch_workspace(&desktop, 2), "go to where it went");
+    check(desktop_relayout(&desktop), "and lay that out");
+    check(surface_valid(&leaving->client), "its surface is real again");
+    surface_clear(&leaving->client, 0x0000FFu);
+    check(surface_pixel(&leaving->client, 1, 1) == 0x0000FFu, "and it can be drawn in");
+
+    printf("the same holds for a window that is merely hidden\n");
+    build(3);
+    struct desktop_app *hidden = desktop_app_at(&desktop, 2);
+    check(desktop_set_hidden(&desktop, hidden->id, true), "hide one");
+    check(desktop_relayout(&desktop), "and lay out");
+    check(!surface_valid(&hidden->client), "its surface is emptied too");
+}
+
 int main(void)
 {
     test_windows_tile_at_every_count();
@@ -330,6 +459,8 @@ int main(void)
     test_the_focused_frame_is_the_one_with_the_accent();
     test_the_bars_are_drawn_after_composition();
     test_a_taskbar_click_finds_the_right_app();
+    test_workspaces();
+    test_an_offscreen_window_cannot_draw_into_another();
     test_nonsense_is_refused();
 
     if (failures > 0) {

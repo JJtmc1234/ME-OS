@@ -142,7 +142,9 @@ static void command_help(struct term *term)
     term_println(term, "  HELP     THIS LIST");
     term_println(term, "ECHO TEXT > FILE WRITES INSTEAD OF PRINTING.");
     term_println(term, "KEYS: CTRL ARROWS MOVE FOCUS, CTRL H HIDES,");
-    term_println(term, "      CTRL S SHOWS ALL, CTRL N AND W RESIZE.");
+    term_println(term, "      CTRL S SHOWS ALL, CTRL N AND W RESIZE,");
+    term_println(term, "      CTRL 1 TO 4 SWITCH WORKSPACE, CTRL M SENDS");
+    term_println(term, "      THIS WINDOW TO THE NEXT ONE.");
 }
 
 static void command_uptime(struct cmd_context *context)
