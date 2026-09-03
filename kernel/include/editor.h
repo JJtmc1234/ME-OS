@@ -20,10 +20,23 @@
 #include <stdint.h>
 
 #include "surface.h"
+#include "vfs.h"
 
 #define EDIT_MAX_LINES 48
 #define EDIT_MAX_COLS  110
 #define EDIT_PATH_MAX  128
+
+/* A document this editor will hold has to be one the filesystem will take.
+ *
+ * Before M24 it was not. The editor held about five thousand characters and a
+ * file held five hundred, so you could type a page and be told on Ctrl O that
+ * none of it could be saved. Refusing was the right thing to do with what it
+ * had, and the right fix was to make the two agree.
+ *
+ * Every line plus a newline, which is the worst case and the one that matters.
+ */
+_Static_assert(EDIT_MAX_LINES * (EDIT_MAX_COLS + 1) <= VFS_FILE_MAX,
+               "the editor can hold a document the filesystem would refuse");
 
 struct editor {
     char lines[EDIT_MAX_LINES][EDIT_MAX_COLS + 1];

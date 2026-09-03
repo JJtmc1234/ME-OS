@@ -305,9 +305,19 @@ void cmdfs_df(struct cmd_context *context)
     term_print(term, " OF ");
     term_print_number(term, VFS_MAX_NODES);
     term_newline(term);
+    /* Blocks, because that is the limit a person actually meets. The node table
+     * runs out at ninety six names. The pool runs out at whatever the files in
+     * them add up to, and that is the one that stops a document being saved. */
+    term_print(term, "BLOCKS  ");
+    term_print_number(term, vfs_used_blocks(context->fs));
+    term_print(term, " OF ");
+    term_print_number(term, VFS_MAX_BLOCKS);
+    term_print(term, ", ");
+    term_print_number(term, VFS_BLOCK);
+    term_println(term, " BYTES EACH");
     term_print(term, "PER FILE ");
     term_print_number(term, VFS_FILE_MAX);
-    term_println(term, " BYTES");
+    term_println(term, " BYTES AT MOST");
 
     /* The one thing about this filesystem that will surprise somebody, said
      * every time. Which of the two it is depends on the machine, and getting it

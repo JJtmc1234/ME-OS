@@ -367,12 +367,12 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
 $(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
-                    kernel/src/cmdfs.c kernel/src/vfs.c \
+                    kernel/src/cmdfs.c kernel/src/vfs.c kernel/src/vfsblock.c \
                     kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
                     $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
-		kernel/src/cmd.c kernel/src/cmdfs.c kernel/src/vfs.c \
+		kernel/src/cmd.c kernel/src/cmdfs.c kernel/src/vfs.c kernel/src/vfsblock.c \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 
 # The editor on its own: insert in the middle, split a line, join two, and the
@@ -391,20 +391,22 @@ $(BUILD)/rtc_test: tests/rtc_test.c kernel/src/rtc.c $(HEADERS)
 
 # The filesystem on its own. Path resolution, the root that cannot be climbed
 # out of, and the working directory that must not be deleted from under you.
-$(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c $(HEADERS)
+$(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c kernel/src/vfsblock.c $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(HOST_TEST_FLAGS) tests/vfs_test.c kernel/src/vfs.c -o $@
+	$(CC) $(HOST_TEST_FLAGS) tests/vfs_test.c kernel/src/vfs.c \
+		kernel/src/vfsblock.c -o $@
 
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
 $(BUILD)/vfsdisk_test: tests/vfsdisk_test.c kernel/src/vfsdisk.c \
                        kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
-                       kernel/src/disk.c kernel/src/vfs.c $(HEADERS)
+                       kernel/src/disk.c kernel/src/vfs.c kernel/src/vfsblock.c \
+                       $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/vfsdisk_test.c kernel/src/vfsdisk.c \
 		kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
-		kernel/src/disk.c kernel/src/vfs.c -o $@
+		kernel/src/disk.c kernel/src/vfs.c kernel/src/vfsblock.c -o $@
 
 $(BUILD)/cpu_test: tests/cpu_test.c kernel/src/cpu.c $(HEADERS)
 	@mkdir -p $(BUILD)

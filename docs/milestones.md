@@ -572,6 +572,74 @@ prints when it loads. The check also fails if the first boot loaded anything,
 because that would mean the disk was not blank and the second boot proved
 nothing.
 
+## M24 files made of blocks, so a document fits in one
+
+Done. A file was five hundred and twelve bytes. It is six thousand now, and the
+reason that number is six thousand rather than a round one is the point of the
+milestone.
+
+**The editor could hold more than a file could take.** Forty eight lines of a
+hundred and ten characters is a little over five thousand, and a file held five
+hundred. You could type a page, press Ctrl O, and be told that none of it could
+be saved. Refusing was the right thing to do with what it had. The right fix was
+to make the two agree, and there is now a static assertion in `editor.h` that
+fails the build if they ever stop agreeing.
+
+**Fixed blocks, not a heap.** Every block is the same size, so nothing here can
+fragment: a free block always fits whatever wants one. That removes the whole
+class of bug where a filesystem with room left refuses a file because none of
+the free space is in one piece. The cost is that a file of one byte still uses a
+whole block, which is a cost worth paying to delete a category of failure.
+
+**Direct blocks only.** Twelve block numbers held inside the node, and no
+indirect block. Twelve reaches six kilobytes, which is more than the editor can
+hold, and an indirect block would add a second way to lose a file for a size
+nothing here can produce.
+
+**A bitmap, not a free list, and the bitmap is not on the disk.** A free list is
+a chain, and a chain on a disk is one wrong number away from a loop that never
+ends or a block handed out twice. Which blocks are spoken for is worked out from
+what the files claim, every time a disk is read, because a bitmap on the disk
+would be a second answer to a question the files already answer. When two
+answers disagree, the machine hands the same block to two files and each writes
+over the other.
+
+**All or nothing.** A file that asked for three blocks and got two has a hole in
+the middle of it, and nothing downstream can tell. So the blocks are taken into
+a list first and written into the node only once every one of them came back,
+and a request the pool cannot cover puts every block back and leaves the file
+exactly as it was. Removing the rollback and running the tests fails two checks,
+which is how that is known to be tested rather than merely written.
+
+**Two files naming the same block is the new way to be wrong.** No amount of
+checking the tree would catch it, because the tree is perfectly good. It is
+caught where the bitmap is built, along with a block number past the end of the
+pool, a gap in the middle of a file, a file holding fewer blocks than its length
+needs, and a directory holding one at all.
+
+**A free node is written to the disk as zeros**, and zero read back as a block
+number is block zero rather than no block. Without one line in `read_node` every
+free node on a disk would come back claiming the first block, and the check that
+no two owners share one would then refuse every disk ever written.
+
+**Blocks are cleared when handed out, not when given back.** A block still
+holding the last file's bytes would show them through the tail of a file that
+was never written that far, and the length is the only thing standing between
+that and being read.
+
+**The disk format is version two.** A node used to carry its contents and needed
+two sectors. It carries twelve block numbers now and fits in well under one, so
+nodes are one sector each and blocks follow them, one to a sector, because a
+block is exactly a sector. A version one disk is refused by version rather than
+read as though the fields were where this build expects them.
+
+**The boot test now checks a file that spans blocks.** The starting filesystem
+holds a guide that is deliberately longer than one block, and the log names the
+largest file with a position sensitive checksum of it. The run before the
+restart and the run after it have to agree. A block count alone would not do:
+a file whose two blocks came back the wrong way round is exactly as long as one
+that did not.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -583,7 +651,7 @@ nothing.
 
 ## Verification status
 
-M1 to M23 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M24 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -619,4 +687,5 @@ Two kinds of test run:
   writes a file to it, and the second run is handed the ISO and that disk and
   nothing else. The check fails if the first boot loaded anything, because a
   disk left over from an earlier run would pass without the kernel having
-  written a byte.
+  written a byte. Since M24 it also checks that the largest file spans more
+  than one block and that its checksum is the same either side of the restart.

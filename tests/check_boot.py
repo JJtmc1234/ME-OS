@@ -592,7 +592,34 @@ def check_persistence() -> list[str]:
             "the file written before the restart is not on the disk after it: "
             + holds[-1])
 
+    # M24. One file that really spans blocks, not a total across the filesystem.
+    # A hundred single block files add up to the same number as fifty of two, so
+    # only the largest file can answer whether the join between two blocks was
+    # written, read back, and put together in the right order.
+    largest = [l for l in again.splitlines() if l.startswith("me-os: largest file ")]
+    if not largest:
+        raise CheckFailed("the second boot never said what the largest file was")
+    spans = int(largest[-1].split(" bytes in ")[-1].split()[0])
+    if spans < 2:
+        raise CheckFailed(
+            "nothing that came back off the disk was longer than a single block, "
+            "so the join between two was never tested: " + largest[-1])
+
+    # And the same bytes in the same order. The block count says a file spanned
+    # two blocks. It does not say they came back the right way round, and a file
+    # whose blocks were swapped is exactly as long as one that was not.
+    before = [l for l in first.splitlines() if l.startswith("me-os: largest file ")]
+    if not before:
+        raise CheckFailed("the first boot never said what its largest file was")
+    if before[-1].split(", sum ")[-1] != largest[-1].split(", sum ")[-1]:
+        raise CheckFailed(
+            "the largest file changed across the restart, so what came off the "
+            f"disk is not what went on it:\n    before {before[-1]}\n"
+            f"    after  {largest[-1]}")
+
     return [f"M23 disk: {found[-1].split('me-os: disk ')[-1]}",
+            f"M24 blocks: {largest[-1].split('largest file ')[-1]}, so a file "
+            f"that spans blocks came back whole",
             f"M23 persistence: {loaded[-1].split('disk, ')[-1]} came back after "
             f"a restart, holding{holds[-1].split('disk holds')[-1]}"]
 
@@ -1376,14 +1403,15 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M23 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M24 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
           "presented through dirty regions rather than whole screen repaints, "
           "tiled into a desktop with workspaces, a shell, an editor and a clock, "
-          "on a filesystem that is still there after the machine restarts")
+          "on a filesystem of files made of blocks that is still there after "
+          "the machine restarts")
     print("A person should still watch it boot once with make run.")
     return 0
 

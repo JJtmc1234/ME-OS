@@ -6,6 +6,8 @@
  */
 #include "vfsdisk_format.h"
 
+#include "vfsblock.h"
+
 #define NODE_BYTES VFSDISK_NODE_BYTES
 
 const char *vfsdisk_explain(enum vfsdisk_result result)
@@ -44,6 +46,24 @@ enum vfsdisk_result vfsdisk_save(const struct vfs *fs, const struct disk *disk)
             return VFSDISK_IO_FAILED;
         }
     }
+
+    /* Then the blocks, one to a sector. A block nobody is using is written as
+     * zeros rather than as whatever it last held, for the same reason a free
+     * node is: what a deleted file held should not be sitting on the disk. */
+    for (uint64_t i = 0; i < VFS_MAX_BLOCKS; i++) {
+        if (fs->block_used[i]) {
+            for (uint64_t at = 0; at < VFS_BLOCK; at++) {
+                record[at] = (uint8_t)fs->blocks[i][at];
+            }
+        } else {
+            for (uint64_t at = 0; at < VFS_BLOCK; at++) {
+                record[at] = 0;
+            }
+        }
+        if (!disk_write(disk, VFSDISK_BLOCKS_AT + i, record, 1)) {
+            return VFSDISK_IO_FAILED;
+        }
+    }
     return VFSDISK_OK;
 }
 
@@ -77,9 +97,25 @@ enum vfsdisk_result vfsdisk_load(struct vfs *fs, const struct disk *disk)
         }
         vfsdisk_read_node(record, &fs->nodes[i]);
     }
+
+    for (uint64_t i = 0; i < VFS_MAX_BLOCKS; i++) {
+        if (!disk_read(disk, VFSDISK_BLOCKS_AT + i, record, 1)) {
+            vfs_init(fs);
+            return VFSDISK_IO_FAILED;
+        }
+        for (uint64_t at = 0; at < VFS_BLOCK; at++) {
+            fs->blocks[i][at] = (char)record[at];
+        }
+    }
+
+    /* Which blocks are spoken for is worked out from the files rather than read
+     * off the disk. A bitmap on the disk is a second answer to a question the
+     * files already answer, and when two answers disagree the machine gets to
+     * hand the same block to two files. `vfsdisk_sound` builds it, and refuses
+     * the disk if any two files claim the same block. */
     fs->cwd = 0;
 
-    if (!vfsdisk_sound(fs)) {
+    if (!vfsblock_rebuild(fs) || !vfsdisk_sound(fs)) {
         vfs_init(fs);
         return VFSDISK_CORRUPT;
     }

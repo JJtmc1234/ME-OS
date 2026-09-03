@@ -20,15 +20,24 @@
 
 #define VFS_MAX_NODES 96
 #define VFS_NAME_MAX  24
-/* One fixed block per file, held inside the node.
+
+/* Files are made of blocks now, taken from a shared pool.
  *
- * Deliberately not an allocator. A bump allocator would leak on every rewrite
- * and a real one is a milestone of its own, whereas a fixed block cannot
- * fragment, cannot leak and cannot be got wrong. The cost is that a small file
- * takes as much room as a large one, which matters when there is a disk and
- * does not matter yet. */
-#define VFS_FILE_MAX  512
-#define VFS_PATH_MAX  256
+ * M20 gave every node one fixed block of its own, which could not fragment and
+ * could not leak, and cost a small file as much room as a large one. That was
+ * the right trade with no disk under it. It stopped being the right trade when
+ * the editor could hold five thousand characters and a file could hold five
+ * hundred: you could type a document the filesystem could not save.
+ *
+ * Direct blocks only. No indirect block, no tree. Twelve pointers held inside
+ * the node reach six kilobytes, which is more than the editor can hold, and an
+ * indirect block would add a second way to lose a file for a size nothing here
+ * can produce. */
+#define VFS_BLOCK         512
+#define VFS_MAX_BLOCKS    256
+#define VFS_DIRECT_BLOCKS 12
+#define VFS_FILE_MAX      (VFS_BLOCK * VFS_DIRECT_BLOCKS)
+#define VFS_PATH_MAX      256
 
 /* Nothing, rather than a node. Signed so it can be told from index zero, which
  * is the root and is a perfectly good node. */
@@ -62,11 +71,20 @@ struct vfs_node {
     int16_t first_child;
     int16_t next_sibling;
     uint32_t length;
-    char data[VFS_FILE_MAX];
+    /* Which blocks hold the contents, in order, VFS_NONE past the end. The
+     * length is what says how much of the last one is real, so a file is not
+     * rounded up to a whole block by anything that reads it. */
+    int16_t blocks[VFS_DIRECT_BLOCKS];
 };
 
 struct vfs {
     struct vfs_node nodes[VFS_MAX_NODES];
+    /* The pool every file's contents come out of, and which of it is spoken
+     * for. A bitmap rather than a free list, because a free list on a disk is a
+     * chain that a single wrong number turns into a loop, and this can be
+     * checked against what the files actually claim. */
+    char blocks[VFS_MAX_BLOCKS][VFS_BLOCK];
+    bool block_used[VFS_MAX_BLOCKS];
     int16_t cwd;
     /* How many times anything in here has actually changed. Every operation
      * that succeeds moves it and every one that is refused does not.
@@ -119,5 +137,15 @@ enum vfs_result vfs_copy(struct vfs *fs, const char *from, const char *to);
 /* How many nodes are in use and how many there are, so a person can see the
  * limit rather than meeting it. */
 uint64_t vfs_used_nodes(const struct vfs *fs);
+
+/* The same for blocks, which is the limit a person actually meets: the node
+ * table runs out at ninety six names and the pool runs out at whatever those
+ * files add up to. */
+uint64_t vfs_used_blocks(const struct vfs *fs);
+
+/* How many blocks a file of this many bytes needs. Public because the disk
+ * format and the tests both have to agree with the allocator about it, and
+ * three copies of a rounding division is two too many. */
+uint64_t vfs_blocks_for(uint64_t length);
 
 #endif /* ME_VFS_H */

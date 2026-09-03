@@ -23,14 +23,21 @@
 
 /* Eight bytes, so it fills the front of the header exactly. */
 #define VFSDISK_MAGIC   "ME-OS FS"
-#define VFSDISK_VERSION 1u
+#define VFSDISK_VERSION 2u
 
-/* Two sectors per node, which is more room than a node needs. Density is worth
- * nothing here and simple arithmetic is worth a lot: node `i` is at sector
- * `1 + 2 * i`, and that is a sum anybody can check by hand against a hex dump
- * when something has gone wrong. */
-#define VFSDISK_NODE_SECTORS 2u
-#define VFSDISK_SECTORS      (1u + VFS_MAX_NODES * VFSDISK_NODE_SECTORS)
+/* One sector per node, and one per block, laid out in that order.
+ *
+ *   sector 0                      the header
+ *   sectors 1 to VFS_MAX_NODES    the nodes, node `i` at sector `1 + i`
+ *   the rest                      the blocks, block `i` at BLOCKS_AT + i
+ *
+ * A node needed two sectors in version 1, because it carried its contents. It
+ * carries twelve block numbers now and fits in well under one, and a block is
+ * exactly a sector, so the arithmetic is a sum anybody can check by hand
+ * against a hex dump when something has gone wrong. */
+#define VFSDISK_NODE_SECTORS 1u
+#define VFSDISK_BLOCKS_AT    (1u + VFS_MAX_NODES * VFSDISK_NODE_SECTORS)
+#define VFSDISK_SECTORS      (VFSDISK_BLOCKS_AT + VFS_MAX_BLOCKS)
 
 enum vfsdisk_result {
     VFSDISK_OK,
@@ -48,9 +55,10 @@ enum vfsdisk_result {
 
 const char *vfsdisk_explain(enum vfsdisk_result result);
 
-/* Writes the whole filesystem. Everything, every time, rather than only what
- * changed: tracking that is a milestone of its own and getting it wrong loses a
- * file quietly, which is the one failure a filesystem must not have. */
+/* Writes the whole filesystem, nodes and blocks. Everything, every time, rather
+ * than only what changed: tracking that is a milestone of its own and getting
+ * it wrong loses a file quietly, which is the one failure a filesystem must not
+ * have. */
 enum vfsdisk_result vfsdisk_save(const struct vfs *fs, const struct disk *disk);
 
 /* Reads it back.

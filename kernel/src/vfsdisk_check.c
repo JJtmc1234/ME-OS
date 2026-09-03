@@ -18,6 +18,8 @@
  */
 #include "vfsdisk.h"
 
+#include "vfsblock.h"
+
 static bool in_range(int16_t at)
 {
     return at >= 0 && at < VFS_MAX_NODES;
@@ -65,6 +67,25 @@ static bool fields_ok(const struct vfs *fs, int16_t at)
     }
     if (node->kind == VFS_DIR && node->length != 0) {
         return false;
+    }
+    /* Exactly the blocks the length calls for. Too few and the end of the file
+     * has nowhere to be, and reading it walks off the block table. Too many and
+     * the pool leaks room to a file that is not using it, which nothing else
+     * would ever notice. */
+    if (vfsblock_held(node) != vfs_blocks_for(node->length)) {
+        return false;
+    }
+    /* And every one of them accounted for. `vfsblock_rebuild` marks what the
+     * files claim, so a block a file holds that is not marked is a block this
+     * node was not counted for, which means the two disagree. */
+    for (uint64_t i = 0; i < VFS_DIRECT_BLOCKS; i++) {
+        const int16_t block = node->blocks[i];
+        if (block == VFS_NONE) {
+            continue;
+        }
+        if (block < 0 || block >= VFS_MAX_BLOCKS || !fs->block_used[block]) {
+            return false;
+        }
     }
     /* A file with children would be listed as a directory by anything walking
      * the tree and refused as a directory by everything else. */

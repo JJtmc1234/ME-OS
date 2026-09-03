@@ -4,7 +4,8 @@
 #define DATA_AT    64u
 
 _Static_assert(VFS_NAME_MAX <= DATA_AT - 40, "the name has to fit before the fields");
-_Static_assert(DATA_AT + VFS_FILE_MAX <= NODE_BYTES, "a node has to fit its record");
+_Static_assert(DATA_AT + VFS_DIRECT_BLOCKS * 2 <= NODE_BYTES,
+               "a node's block numbers have to fit its record");
 
 static void put32(uint8_t *at, uint32_t value)
 {
@@ -52,6 +53,8 @@ void vfsdisk_write_header(uint8_t *sector)
     put32(sector + 16, VFS_FILE_MAX);
     put32(sector + 20, VFS_NAME_MAX);
     put32(sector + 24, VFSDISK_NODE_SECTORS);
+    put32(sector + 28, VFS_MAX_BLOCKS);
+    put32(sector + 32, VFS_BLOCK);
 }
 
 /* Which of the header's promises this build can keep. Split from the reading so
@@ -70,7 +73,9 @@ enum vfsdisk_result vfsdisk_judge_header(const uint8_t *sector)
     if (get32(sector + 12) != VFS_MAX_NODES ||
         get32(sector + 16) != VFS_FILE_MAX ||
         get32(sector + 20) != VFS_NAME_MAX ||
-        get32(sector + 24) != VFSDISK_NODE_SECTORS) {
+        get32(sector + 24) != VFSDISK_NODE_SECTORS ||
+        get32(sector + 28) != VFS_MAX_BLOCKS ||
+        get32(sector + 32) != VFS_BLOCK) {
         return VFSDISK_WRONG_SHAPE;
     }
     return VFSDISK_OK;
@@ -96,13 +101,11 @@ void vfsdisk_write_node(uint8_t *record, const struct vfs_node *node)
     put16(record + 30, node->next_sibling);
     put32(record + 32, node->length);
 
-    /* Only what the file holds. The rest of the block is whatever was in memory
-     * and putting it on the disk would write the ends of deleted files into a
-     * place somebody can read them back out of. */
-    const uint32_t length =
-        node->length > VFS_FILE_MAX ? VFS_FILE_MAX : node->length;
-    for (uint32_t i = 0; i < length; i++) {
-        record[DATA_AT + i] = (uint8_t)node->data[i];
+    /* Which blocks hold the contents. The contents themselves are written
+     * separately, because a block is a sector and copying it through a node
+     * record would mean reading it twice. */
+    for (uint64_t i = 0; i < VFS_DIRECT_BLOCKS; i++) {
+        put16(record + DATA_AT + i * 2, node->blocks[i]);
     }
 }
 
@@ -118,9 +121,11 @@ void vfsdisk_read_node(const uint8_t *record, struct vfs_node *node)
     node->next_sibling = get16(record + 30);
     node->length = get32(record + 32);
 
-    const uint32_t length =
-        node->length > VFS_FILE_MAX ? VFS_FILE_MAX : node->length;
-    for (uint32_t i = 0; i < VFS_FILE_MAX; i++) {
-        node->data[i] = i < length ? (char)record[DATA_AT + i] : '\0';
+    /* A free node's record is all zeros, and a zero read as a block number is
+     * block zero rather than no block. Without this, every free node on the
+     * disk would come back claiming the first block, and the check that no two
+     * owners share one would refuse every disk ever written. */
+    for (uint64_t i = 0; i < VFS_DIRECT_BLOCKS; i++) {
+        node->blocks[i] = node->used ? get16(record + DATA_AT + i * 2) : VFS_NONE;
     }
 }

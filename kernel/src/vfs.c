@@ -1,5 +1,7 @@
 #include "vfs.h"
 
+#include "vfsblock.h"
+
 const char *vfs_explain(enum vfs_result result)
 {
     switch (result) {
@@ -42,6 +44,15 @@ void vfs_init(struct vfs *fs)
     }
     for (int16_t i = 0; i < VFS_MAX_NODES; i++) {
         fs->nodes[i].used = false;
+        /* Emptied rather than left alone. A free node still naming blocks would
+         * have the check in `vfsdisk_check.c` see two owners for one block the
+         * moment somebody else took it. */
+        for (uint64_t at = 0; at < VFS_DIRECT_BLOCKS; at++) {
+            fs->nodes[i].blocks[at] = VFS_NONE;
+        }
+    }
+    for (uint64_t i = 0; i < VFS_MAX_BLOCKS; i++) {
+        fs->block_used[i] = false;
     }
     struct vfs_node *root = &fs->nodes[0];
     root->used = true;
@@ -346,6 +357,9 @@ static enum vfs_result make(struct vfs *fs, const char *path, enum vfs_kind kind
     node->parent = parent;
     node->first_child = VFS_NONE;
     node->length = 0;
+    for (uint64_t i = 0; i < VFS_DIRECT_BLOCKS; i++) {
+        node->blocks[i] = VFS_NONE;
+    }
 
     /* Added at the end, so a listing comes out in the order things were made
      * rather than backwards. */
@@ -405,7 +419,10 @@ enum vfs_result vfs_write(struct vfs *fs, const char *path, const char *text)
     if (found != VFS_OK) {
         return found;
     }
-    fs->nodes[at].length = 0;
+    /* Replacing, so the old contents go back to the pool before the new ones
+     * are asked for. Otherwise rewriting a large file with a small one would
+     * hold the large one's room until the file was deleted. */
+    vfsblock_release(fs, &fs->nodes[at]);
     return vfs_append(fs, path, text);
 }
 
@@ -427,8 +444,18 @@ enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
     if (node->length + adding > VFS_FILE_MAX) {
         return VFS_TOO_BIG;
     }
+    /* Every block it will need, before a byte is written. Taking them as it
+     * went would leave the file longer and half written when the pool ran out
+     * in the middle, and there is no way back from that. */
+    if (!vfsblock_reserve(fs, node, vfs_blocks_for(node->length + adding))) {
+        return VFS_NO_SPACE;
+    }
     for (uint64_t i = 0; i < adding; i++) {
-        node->data[node->length + i] = text[i];
+        char *byte = vfsblock_at(fs, node, node->length + i);
+        if (byte == NULL) {
+            return VFS_NO_SPACE;
+        }
+        *byte = text[i];
     }
     node->length += (uint32_t)adding;
     fs->changes++;
@@ -457,7 +484,11 @@ enum vfs_result vfs_read(const struct vfs *fs, const char *path,
     const struct vfs_node *node = &fs->nodes[at];
     uint64_t written = 0;
     while (written < node->length && written + 1 < capacity) {
-        out[written] = node->data[written];
+        const char *byte = vfsblock_read_at(fs, node, written);
+        if (byte == NULL) {
+            break;
+        }
+        out[written] = *byte;
         written++;
     }
     out[written] = '\0';
@@ -494,6 +525,9 @@ enum vfs_result vfs_remove(struct vfs *fs, const char *path)
     }
 
     unlink_from_parent(fs, at);
+    /* The room goes back with the name. A node marked free while still naming
+     * blocks is how a filesystem fills up with files nobody can see. */
+    vfsblock_release(fs, &fs->nodes[at]);
     fs->nodes[at].used = false;
     fs->changes++;
     return VFS_OK;
@@ -566,13 +600,26 @@ enum vfs_result vfs_copy(struct vfs *fs, const char *from, const char *to)
     if (created != VFS_OK) {
         return created;
     }
-    /* Read from the source after the destination exists, because making it may
-     * have been what filled the filesystem up. */
-    const struct vfs_node *source = &fs->nodes[at];
-    for (uint32_t i = 0; i < source->length; i++) {
-        fs->nodes[made].data[i] = source->data[i];
+    /* Room for the copy after the destination exists, because making it may
+     * have been what filled the node table up, and taking blocks for a file
+     * that then cannot be named would lose them until the next restart. */
+    const uint32_t length = fs->nodes[at].length;
+    if (!vfsblock_reserve(fs, &fs->nodes[made], vfs_blocks_for(length))) {
+        /* The name goes back with the room. Half a copy under the new name is
+         * worse than no copy, because only one of the two looks like a failure. */
+        (void)vfs_remove(fs, to);
+        return VFS_NO_SPACE;
     }
-    fs->nodes[made].length = source->length;
+    for (uint32_t i = 0; i < length; i++) {
+        const char *from_at = vfsblock_read_at(fs, &fs->nodes[at], i);
+        char *to_at = vfsblock_at(fs, &fs->nodes[made], i);
+        if (from_at == NULL || to_at == NULL) {
+            (void)vfs_remove(fs, to);
+            return VFS_NO_SPACE;
+        }
+        *to_at = *from_at;
+    }
+    fs->nodes[made].length = length;
     return VFS_OK;
 }
 

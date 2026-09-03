@@ -73,6 +73,13 @@ static uint8_t *record(int16_t node)
     return image + (1 + (uint64_t)node * VFSDISK_NODE_SECTORS) * DISK_SECTOR;
 }
 
+/* Where node `n` records its `i`th block number. Mirrors DATA_AT in
+ * kernel/src/vfsdisk_format.c. */
+static uint8_t *block_slot(int16_t node, uint64_t i)
+{
+    return record(node) + 64 + i * 2;
+}
+
 static void put16_at(uint8_t *at, int16_t value)
 {
     at[0] = (uint8_t)(uint16_t)value;
@@ -164,8 +171,8 @@ static void test_a_deleted_file_is_not_written_out(void)
     memset(image, 0, sizeof image);
     check(vfsdisk_save(&source, &memory_disk) == VFSDISK_OK, "and the disk written");
 
-    /* `vfs_init` and `vfs_remove` mark a node free without clearing it, so the
-     * contents are still in memory. Writing them out would put a deleted file
+    /* Deleting a file gives its blocks back without clearing them, so the text
+     * is still in the pool. Writing a free block out would put a deleted file
      * somewhere it can be read back. */
     bool found = false;
     for (uint64_t i = 0; i + 18 <= sizeof image; i++) {
@@ -341,12 +348,82 @@ static void test_a_filesystem_built_in_memory_is_sound(void)
     check(vfsdisk_sound(&source), "and one that has been moved about");
 }
 
+/* M24. Files are lists of blocks now, which adds a way for a disk to be wrong
+ * that no amount of checking the tree would catch: two files naming the same
+ * block. Each writes over the other and neither looks damaged until it is read.
+ */
+static void test_blocks_on_a_disk(void)
+{
+    printf("a file spread over several blocks comes back whole\n");
+    vfs_init(&source);
+    static char pattern[VFS_BLOCK * 3 + 11];
+    for (uint64_t i = 0; i < sizeof pattern - 1; i++) {
+        pattern[i] = (char)('A' + (i % 26));
+    }
+    pattern[sizeof pattern - 1] = '\0';
+    check(vfs_write(&source, "/LONG.TXT", pattern) == VFS_OK, "written");
+    check(round_trip() == VFSDISK_OK, "saved and loaded");
+    check(same_text(&loaded, "/LONG.TXT", pattern), "byte for byte across four blocks");
+    check(vfs_used_blocks(&loaded) == vfs_used_blocks(&source),
+          "and holding the same amount of the pool");
+
+    printf("which blocks are free is worked out again rather than read back\n");
+    check(vfs_write(&loaded, "/MORE.TXT", "SOMETHING ELSE") == VFS_OK,
+          "so a loaded filesystem can still be written to");
+    check(vfs_used_blocks(&loaded) == vfs_used_blocks(&source) + 1,
+          "taking a block nothing else was using");
+
+    printf("two files naming the same block is refused\n");
+    build();
+    check(vfs_write(&source, "/ONE.TXT", "FIRST FILE") == VFS_OK, "one file");
+    check(vfs_write(&source, "/TWO.TXT", "SECOND FILE") == VFS_OK, "and another");
+    check(round_trip() == VFSDISK_OK, "start from a good one");
+    const int16_t one = vfs_resolve(&source, "/ONE.TXT");
+    const int16_t two = vfs_resolve(&source, "/TWO.TXT");
+    put16_at(block_slot(two, 0), source.nodes[one].blocks[0]);
+    check(vfsdisk_load(&loaded, &memory_disk) == VFSDISK_CORRUPT, "so it is refused");
+
+    printf("a block number past the end of the pool is refused\n");
+    build();
+    check(vfs_write(&source, "/ONE.TXT", "FIRST FILE") == VFS_OK, "a file");
+    check(round_trip() == VFSDISK_OK, "start from a good one");
+    put16_at(block_slot(vfs_resolve(&source, "/ONE.TXT"), 0), VFS_MAX_BLOCKS);
+    check(vfsdisk_load(&loaded, &memory_disk) == VFSDISK_CORRUPT, "so it is refused");
+
+    printf("a gap in the middle of a file is refused\n");
+    vfs_init(&source);
+    static char two_blocks[VFS_BLOCK + 40];
+    for (uint64_t i = 0; i < sizeof two_blocks - 1; i++) {
+        two_blocks[i] = 'W';
+    }
+    two_blocks[sizeof two_blocks - 1] = '\0';
+    check(vfs_write(&source, "/GAP.TXT", two_blocks) == VFS_OK, "a file of two blocks");
+    check(round_trip() == VFSDISK_OK, "start from a good one");
+    /* The first slot emptied and the second left alone. Reading byte zero would
+     * then land in the second block, silently, because the arithmetic still
+     * points at something real. */
+    put16_at(block_slot(vfs_resolve(&source, "/GAP.TXT"), 0), VFS_NONE);
+    check(vfsdisk_load(&loaded, &memory_disk) == VFSDISK_CORRUPT, "so it is refused");
+
+    printf("a file holding fewer blocks than its length needs is refused\n");
+    check(round_trip() == VFSDISK_OK, "start from a good one");
+    put16_at(block_slot(vfs_resolve(&source, "/GAP.TXT"), 1), VFS_NONE);
+    check(vfsdisk_load(&loaded, &memory_disk) == VFSDISK_CORRUPT, "so it is refused");
+
+    printf("and a directory holding one at all is refused\n");
+    build();
+    check(round_trip() == VFSDISK_OK, "start from a good one");
+    put16_at(block_slot(vfs_resolve(&source, "/HOME"), 0), 0);
+    check(vfsdisk_load(&loaded, &memory_disk) == VFSDISK_CORRUPT, "so it is refused");
+}
+
 int main(void)
 {
     test_what_goes_on_comes_back();
     test_a_deleted_file_is_not_written_out();
     test_a_disk_that_is_not_ours();
     test_a_disk_that_is_ours_and_impossible();
+    test_blocks_on_a_disk();
     test_a_disk_that_will_not_answer();
     test_a_filesystem_built_in_memory_is_sound();
 

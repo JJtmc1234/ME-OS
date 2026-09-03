@@ -423,6 +423,164 @@ static void test_only_real_changes_are_counted(void)
     check(fs.changes == at, "so the disk is not written for nothing");
 }
 
+/* M24. Files are made of blocks now, and the interesting cases are the ones
+ * where the pool runs out partway rather than cleanly. */
+static void test_files_are_made_of_blocks(void)
+{
+    printf("a file takes only the blocks it needs\n");
+    vfs_init(&fs);
+    check(vfs_used_blocks(&fs) == 0, "an empty filesystem holds no blocks");
+    check(vfs_create(&fs, "/A.TXT") == VFS_OK, "an empty file");
+    check(vfs_used_blocks(&fs) == 0, "takes no room at all");
+
+    check(vfs_write(&fs, "/A.TXT", "SHORT") == VFS_OK, "a few bytes");
+    check(vfs_used_blocks(&fs) == 1, "take one block");
+
+    char big[VFS_BLOCK + 100];
+    for (uint64_t i = 0; i < sizeof big - 1; i++) {
+        big[i] = 'X';
+    }
+    big[sizeof big - 1] = '\0';
+    check(vfs_write(&fs, "/A.TXT", big) == VFS_OK, "more than one block fits");
+    check(vfs_used_blocks(&fs) == 2, "and takes exactly two");
+
+    printf("rewriting a big file with a small one gives the room back\n");
+    check(vfs_write(&fs, "/A.TXT", "SHORT AGAIN") == VFS_OK, "written smaller");
+    check(vfs_used_blocks(&fs) == 1, "so it is back to one block");
+
+    printf("and deleting it gives all of it back\n");
+    check(vfs_remove(&fs, "/A.TXT") == VFS_OK, "removed");
+    check(vfs_used_blocks(&fs) == 0, "the pool is empty again");
+
+    printf("a file longer than one block reads back byte for byte\n");
+    vfs_init(&fs);
+    char pattern[VFS_BLOCK * 3 + 7];
+    for (uint64_t i = 0; i < sizeof pattern - 1; i++) {
+        pattern[i] = (char)('A' + (i % 26));
+    }
+    pattern[sizeof pattern - 1] = '\0';
+    check(vfs_write(&fs, "/LONG.TXT", pattern) == VFS_OK, "written");
+    char out[VFS_FILE_MAX + 1];
+    uint64_t length = 0;
+    check(vfs_read(&fs, "/LONG.TXT", out, sizeof out, &length) == VFS_OK, "read back");
+    check(length == sizeof pattern - 1, "the same length");
+    check(memcmp(out, pattern, length) == 0, "and the same bytes across every block");
+
+    printf("appending across a block boundary keeps what was already there\n");
+    vfs_init(&fs);
+    char nearly[VFS_BLOCK - 3];
+    for (uint64_t i = 0; i < sizeof nearly - 1; i++) {
+        nearly[i] = 'Q';
+    }
+    nearly[sizeof nearly - 1] = '\0';
+    check(vfs_write(&fs, "/EDGE.TXT", nearly) == VFS_OK, "a file just short of a block");
+    check(vfs_used_blocks(&fs) == 1, "in one block");
+    check(vfs_append(&fs, "/EDGE.TXT", "ABCDEF") == VFS_OK, "appended over the join");
+    check(vfs_used_blocks(&fs) == 2, "which took a second block");
+    check(vfs_read(&fs, "/EDGE.TXT", out, sizeof out, &length) == VFS_OK, "read back");
+    check(length == sizeof nearly - 1 + 6, "the whole length");
+    check(memcmp(out, nearly, sizeof nearly - 1) == 0, "the first part is untouched");
+    check(memcmp(out + sizeof nearly - 1, "ABCDEF", 6) == 0, "and the rest followed it");
+
+    printf("a block handed out again does not show the last file's bytes\n");
+    vfs_init(&fs);
+    check(vfs_write(&fs, "/OLD.TXT", "PINEAPPLE") == VFS_OK, "a file");
+    check(vfs_remove(&fs, "/OLD.TXT") == VFS_OK, "deleted");
+    check(vfs_write(&fs, "/NEW.TXT", "HI") == VFS_OK, "and another in its place");
+    check(vfs_read(&fs, "/NEW.TXT", out, sizeof out, &length) == VFS_OK, "read");
+    check(length == 2 && memcmp(out, "HI", 2) == 0, "which holds only its own");
+}
+
+/* The one that matters. A file that asked for three blocks and got two has a
+ * hole in the middle of it, and nothing downstream can tell. */
+
+/* Fills the pool until exactly `leave` blocks are free.
+ *
+ * With large files, deliberately. Filling it with one block files runs the node
+ * table out at ninety six long before the pool runs out at two hundred and
+ * fifty six, so the test would be checking the wrong limit and would pass
+ * whatever the allocator did.
+ */
+static void fill_the_pool(uint64_t leave)
+{
+    static char slab[VFS_FILE_MAX + 1];
+    for (uint64_t i = 0; i < VFS_FILE_MAX; i++) {
+        slab[i] = 'F';
+    }
+    slab[VFS_FILE_MAX] = '\0';
+
+    int made = 0;
+    while (VFS_MAX_BLOCKS - vfs_used_blocks(&fs) > leave) {
+        const uint64_t free_now = VFS_MAX_BLOCKS - vfs_used_blocks(&fs) - leave;
+        const uint64_t want = free_now > VFS_DIRECT_BLOCKS ? VFS_DIRECT_BLOCKS
+                                                           : free_now;
+        char name[VFS_NAME_MAX];
+        snprintf(name, sizeof name, "/F%d", made++);
+        slab[want * VFS_BLOCK] = '\0';
+        const enum vfs_result done = vfs_write(&fs, name, slab);
+        slab[want * VFS_BLOCK] = 'F';
+        if (done != VFS_OK) {
+            break;
+        }
+    }
+}
+
+static void test_running_out_of_room_changes_nothing(void)
+{
+    printf("a write the pool cannot cover leaves the file as it was\n");
+    vfs_init(&fs);
+    check(vfs_write(&fs, "/KEEP.TXT", "ORIGINAL") == VFS_OK, "a file with something in it");
+
+    fill_the_pool(1);
+    check(VFS_MAX_BLOCKS - vfs_used_blocks(&fs) == 1, "one block is left");
+
+    char wants_more[VFS_BLOCK * 4];
+    for (uint64_t i = 0; i < sizeof wants_more - 1; i++) {
+        wants_more[i] = 'Z';
+    }
+    wants_more[sizeof wants_more - 1] = '\0';
+
+    const uint64_t before = vfs_used_blocks(&fs);
+    check(vfs_append(&fs, "/KEEP.TXT", wants_more) == VFS_NO_SPACE,
+          "a write bigger than what is left is refused");
+    check(vfs_used_blocks(&fs) == before,
+          "and every block it took on the way is given back");
+
+    char out[VFS_FILE_MAX + 1];
+    uint64_t length = 0;
+    check(vfs_read(&fs, "/KEEP.TXT", out, sizeof out, &length) == VFS_OK, "the file reads");
+    check(length == 8 && memcmp(out, "ORIGINAL", 8) == 0,
+          "and holds exactly what it did before");
+
+    printf("what the last free block will hold still fits\n");
+    check(vfs_append(&fs, "/KEEP.TXT", "MORE") == VFS_OK, "a small append");
+    check(vfs_used_blocks(&fs) == before, "in the room the file already had");
+
+    printf("a copy that will not fit leaves no half copy behind\n");
+    fill_the_pool(0);
+    check(vfs_used_blocks(&fs) == VFS_MAX_BLOCKS, "the pool is full");
+    check(vfs_copy(&fs, "/KEEP.TXT", "/COPY.TXT") == VFS_NO_SPACE,
+          "copying with no room is refused");
+    check(vfs_resolve(&fs, "/COPY.TXT") == VFS_NONE,
+          "and the name it would have taken is not there either");
+    check(vfs_used_blocks(&fs) == VFS_MAX_BLOCKS, "with nothing lost either way");
+
+    printf("a file bigger than a file can be is refused before anything moves\n");
+    vfs_init(&fs);
+    static char too_big[VFS_FILE_MAX + 2];
+    for (uint64_t i = 0; i < sizeof too_big - 1; i++) {
+        too_big[i] = 'Y';
+    }
+    too_big[sizeof too_big - 1] = '\0';
+    check(vfs_write(&fs, "/HUGE.TXT", too_big) == VFS_TOO_BIG, "refused");
+    check(vfs_used_blocks(&fs) == 0, "having taken nothing");
+
+    printf("a file exactly as big as a file can be fits\n");
+    too_big[VFS_FILE_MAX] = '\0';
+    check(vfs_write(&fs, "/FULL.TXT", too_big) == VFS_OK, "written");
+    check(vfs_used_blocks(&fs) == VFS_DIRECT_BLOCKS, "using every block it may");
+}
+
 int main(void)
 {
     test_an_empty_filesystem_is_a_root_and_nothing_else();
@@ -435,6 +593,8 @@ int main(void)
     test_the_filesystem_fills_up_honestly();
     test_nonsense_is_refused();
     test_only_real_changes_are_counted();
+    test_files_are_made_of_blocks();
+    test_running_out_of_room_changes_nothing();
 
     if (failures > 0) {
         printf("\n%d filesystem check(s) FAILED\n", failures);

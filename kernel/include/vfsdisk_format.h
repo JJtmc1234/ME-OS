@@ -10,7 +10,9 @@
  *
  *   node      0..23  name           24  kind        25  used
  *            26..27  parent         28..29  first child  30..31  next sibling
- *            32..35  length         64..    contents
+ *            32..35  length         64..    block numbers, two bytes each
+ *
+ *   block     the whole sector, and a block is exactly a sector
  *
  * Written a byte at a time rather than by copying the structures, because a C
  * structure has padding the compiler chooses and a disk written by one build
@@ -27,6 +29,10 @@
 #include "vfsdisk.h"
 
 #define VFSDISK_NODE_BYTES (VFSDISK_NODE_SECTORS * DISK_SECTOR)
+
+/* A block is a sector. Anything else would put a block across a sector boundary
+ * or waste most of one, and both are avoidable by choosing the same number. */
+_Static_assert(VFS_BLOCK == DISK_SECTOR, "a block has to be exactly one sector");
 
 void vfsdisk_write_header(uint8_t *sector);
 /* Which of the header's promises this build can keep. A disk that is not ours

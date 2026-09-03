@@ -186,6 +186,59 @@ static struct vfs filesystem;
 static struct ata_drive drive;
 static struct disk storage;
 
+/* The biggest file there is, said out loud after loading a disk.
+ *
+ * Useful to anybody reading the log, and it is the one line that can show a
+ * file really spans more than one block. A count of blocks across the whole
+ * filesystem cannot: a hundred single block files add up to the same number as
+ * fifty files of two.
+ */
+static void log_largest_file(void)
+{
+    int16_t biggest = VFS_NONE;
+    uint32_t most = 0;
+    for (int16_t at = 0; at < VFS_MAX_NODES; at++) {
+        const struct vfs_node *node = vfs_get(&filesystem, at);
+        if (node == NULL || node->kind != VFS_FILE || node->length < most) {
+            continue;
+        }
+        most = node->length;
+        biggest = at;
+    }
+    if (biggest == VFS_NONE) {
+        return;
+    }
+    char path[VFS_PATH_MAX];
+    vfs_path_of(&filesystem, biggest, path, sizeof path);
+
+    /* And a checksum of what it holds.
+     *
+     * The block count says a file spanned two blocks. It does not say the bytes
+     * came back in the right order, and a file whose second block was read as
+     * its first is exactly as long as one that was not. This is position
+     * sensitive, so the two would differ. The run before a restart and the run
+     * after it can be compared without either of them knowing what the file is
+     * supposed to say. FNV-1a, chosen because it is four lines. */
+    static char text[VFS_FILE_MAX + 1];
+    uint64_t length = 0;
+    uint32_t sum = 2166136261u;
+    if (vfs_read(&filesystem, path, text, sizeof text, &length) == VFS_OK) {
+        for (uint64_t i = 0; i < length; i++) {
+            sum = (sum ^ (uint8_t)text[i]) * 16777619u;
+        }
+    }
+
+    log_str("me-os: largest file ");
+    log_str(path);
+    log_str(", ");
+    log_dec(most);
+    log_str(" bytes in ");
+    log_dec(vfs_blocks_for(most));
+    log_str(" blocks, sum ");
+    log_dec(sum);
+    log_str("\n");
+}
+
 /* Defined further down, next to the terminal that calls it most. */
 static void save_the_filesystem(void);
 
@@ -879,7 +932,9 @@ static void save_the_filesystem(void)
         saved_at = filesystem.changes;
         log_str("me-os: filesystem saved, ");
         log_dec(vfs_used_nodes(&filesystem));
-        log_str(" entries\n");
+        log_str(" entries in ");
+        log_dec(vfs_used_blocks(&filesystem));
+        log_str(" blocks\n");
         return;
     }
     log_str("me-os: FAILED to save the filesystem: ");
@@ -1788,7 +1843,9 @@ void kmain(void)
     if (opened == VFSDISK_OK) {
         log_str("me-os: filesystem loaded from disk, ");
         log_dec(vfs_used_nodes(&filesystem));
-        log_str(" entries\n");
+        log_str(" entries in ");
+        log_dec(vfs_used_blocks(&filesystem));
+        log_str(" blocks\n");
         /* What is actually on it, not only how much. A count proves a disk was
          * read. Names prove it is the disk this machine wrote, which is the
          * thing worth knowing after a restart. */
@@ -1799,6 +1856,7 @@ void kmain(void)
             log_str(vfs_get(&filesystem, child)->name);
         }
         log_str("\n");
+        log_largest_file();
         /* Where the last session was standing is not saved, so start somewhere
          * that is certainly there. */
         if (vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
@@ -1817,9 +1875,29 @@ void kmain(void)
                       "ME OS " ME_OS_VERSION ". A TILING DESKTOP AND A SHELL.") != VFS_OK ||
             vfs_write(&filesystem, "/DOCS/KEYS.TXT",
                       "CTRL ARROWS MOVE FOCUS. CTRL H HIDES. CTRL S SHOWS ALL.") != VFS_OK ||
+            /* Deliberately longer than one block. A file that fits in a single
+             * block would never show whether the second one was written, read
+             * back, or joined on in the right order. */
+            vfs_write(&filesystem, "/DOCS/GUIDE.TXT",
+                      "ME OS KEEPS ITS FILES ON A DISK NOW. ANYTHING YOU MAKE HERE IS STILL "
+                  "HERE THE NEXT TIME THE MACHINE STARTS, AND THERE IS NOTHING TO "
+                  "TYPE TO MAKE THAT HAPPEN. THE SHELL SAVES AFTER EVERY COMMAND "
+                  "THAT CHANGED SOMETHING, AND THE EDITOR SAVES WHEN YOU PRESS "
+                  "CTRL O.\n"
+                  "\n"
+                  "A FILE IS MADE OF BLOCKS OF 512 BYTES, TAKEN FROM A POOL THAT "
+                  "EVERY FILE SHARES. TYPE DF TO SEE HOW MUCH OF IT IS LEFT. ONE "
+                  "FILE CAN HOLD TWELVE BLOCKS, WHICH IS MORE THAN THE EDITOR CAN "
+                  "HOLD, SO ANYTHING YOU CAN TYPE IN THE EDITOR IS SOMETHING YOU "
+                  "CAN SAVE.\n"
+                  "\n"
+                  "THIS FILE IS ITSELF LONGER THAN ONE BLOCK, WHICH IS WHY IT IS "
+                  "HERE. IF YOU CAN READ ALL OF IT AFTER A RESTART THEN THE PARTS "
+                  "THAT MATTER ARE WORKING.") != VFS_OK ||
             vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
             fail("could not lay out the filesystem");
         }
+        log_largest_file();
         /* Onto the disk straight away, so a fresh machine has a filesystem on
          * it rather than one that only appears after the first command. */
         save_the_filesystem();
