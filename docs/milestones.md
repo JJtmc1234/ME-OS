@@ -805,12 +805,16 @@ aim fixed the cursor lands on exactly the pixel it was aimed at, 1015 of 1015.
 `mouse_decode` and the drain loop are both doing their jobs.
 
 What was actually wrong was the aim, and the first fix for it was wrong too. It
-waited for the rectangle to drift somewhere with room to its left. The rectangle
-does not reliably do that: it stops moving while a window is being laid out, and
-the wait would time out and then aim at wherever it had got to, which was
-sometimes twenty five pixels from the edge.
+waited for the rectangle to drift somewhere with room to its left.
 
-Waiting was the wrong idea. There is no wait now. The script drags whichever way
+The rectangle never drifts again by that point in the run. The first arrow press
+stops the drift on purpose, which is what lets M9 and M10 assert exact distances
+rather than approximate ones, and the steering happens before the drag. So the
+wait could only ever time out, on every run, and then aim at wherever the
+steering had left it. It passed for as long as it did because that position
+usually happened to have room.
+
+Waiting was the wrong idea, and it had been the wrong idea since M9. There is no wait now. The script drags whichever way
 has room from where the cursor actually lands, and writes down which way it
 chose, so the check asserts what was really asked for instead of a number
 written in two places that can disagree. It also aims a quarter of the way into
@@ -824,6 +828,20 @@ only thing an edge can do to it.
 
 The check that matters did not change: the rectangle has to move exactly as far
 as the pointer did, whatever that was.
+
+**Then the rest of the suite was read for the same fault, and one more was
+found.** Three checks took the last three captures off the end of a list rather
+than naming the ones they were about. That worked only because each happened to
+be called straight after its own captures were loaded, so inserting a screenshot
+anywhere earlier would have pointed them at the wrong pictures and they would
+have gone on passing. They ask for captures by name now, and naming one that was
+never taken is an error rather than a shrug.
+
+Everything else in that file holds up. The tiling check looks at every layout
+rather than the final one and says why. The focus check refuses to write down
+which windows it expects. The rotation check allows the wobble that drawing
+explains and points at the host test that measures the real thing. Those were
+written to be right rather than to pass.
 
 **A line a script runs is not logged as typed**, which is right, and it means
 the boot test cannot look for it in the log. What proves RUN ran is what it left

@@ -1181,6 +1181,24 @@ def check_rectangle_movement(positions, size) -> list[str]:
     return [f"  M5 rectangle moved across {travelled} pixels: {positions}"]
 
 
+def captures_named(*names: str) -> list[tuple[str, int, int]]:
+    """The recorded rectangles for these captures, by filename.
+
+    By name rather than by taking the last few off the end of the list.
+    Reading the tail worked only because each check happened to be called
+    straight after the captures it was about were loaded, so inserting a
+    screenshot anywhere earlier would have quietly pointed these checks at the
+    wrong pictures and they would have gone on passing.
+    """
+    found = {name: entry for entry in RECTANGLES for name in [entry[0]]}
+    missing = [n for n in names if n not in found]
+    if missing:
+        raise CheckFailed(
+            f"no rectangle was recorded for {', '.join(missing)}, so there is "
+            f"nothing to measure the movement against")
+    return [found[n] for n in names]
+
+
 def check_steering() -> list[str]:
     """M9: the arrow keys move the rectangle, by exactly as much as was pressed.
 
@@ -1190,10 +1208,8 @@ def check_steering() -> list[str]:
     move it afterwards is another press, so the distances are exact rather than
     approximate.
     """
-    if len(RECTANGLES) < 3:
-        raise CheckFailed("not enough captures to tell whether steering works")
-
-    before, down, left = RECTANGLES[-3], RECTANGLES[-2], RECTANGLES[-1]
+    before, down, left = captures_named(
+        "screen-varif.ppm", "screen-steer-down.ppm", "screen-steer-left.ppm")
 
     fell = down[2] - before[2]
     if fell != STEER_STEP * STEER_DOWN_PRESSES:
@@ -1221,10 +1237,8 @@ def check_steering() -> list[str]:
 
 def check_wrapping(size) -> list[str]:
     """M10: crossing each corridor edge reappears at the opposite edge."""
-    if len(RECTANGLES) < 3:
-        raise CheckFailed("not enough captures to tell whether wrapping works")
-
-    before, wrapped_down, wrapped_left = RECTANGLES[-3:]
+    before, wrapped_down, wrapped_left = captures_named(
+        "screen-steer-left.ppm", "screen-wrap-down.ppm", "screen-wrap-left.ppm")
     if wrapped_down[1] != before[1]:
         raise CheckFailed(
             f"pressing down while wrapping changed x from {before[1]} to "
@@ -1256,10 +1270,8 @@ def check_wrapping(size) -> list[str]:
 
 def check_dragging(ready_cursor, held_cursor, released_cursor, size) -> list[str]:
     """M11: the held rectangle follows the pointer, then stays on release."""
-    if len(RECTANGLES) < 3:
-        raise CheckFailed("not enough captures to tell whether dragging works")
-
-    ready, held, released = RECTANGLES[-3:]
+    ready, held, released = captures_named(
+        "screen-drag-ready.ppm", "screen-drag-held.ppm", "screen-drag-release.ppm")
     rect_width = DEMO_WIDTH // RECT_WIDTH_DIVISOR
     rect_height = DEMO_HEIGHT // RECT_HEIGHT_DIVISOR
     if not (ready[1] <= ready_cursor[0] < ready[1] + rect_width and
