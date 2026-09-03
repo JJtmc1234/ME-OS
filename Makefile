@@ -332,6 +332,12 @@ check-reproducible:
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.
 # The filesystem is five files now, and three test programs link all of them.
+# The shell is six files: cutting a line up, the machine's own answers, the
+# dispatcher and its pipeline, files, text filters, and somewhere to write.
+CMD_SRCS := kernel/src/cmd.c kernel/src/cmdline.c kernel/src/cmdinfo.c \
+            kernel/src/cmdfs.c kernel/src/cmdtext.c kernel/src/cmdsort.c \
+            kernel/src/cmdout.c
+
 VFS_SRCS := kernel/src/vfs.c kernel/src/vfspath.c kernel/src/vfstree.c \
             kernel/src/vfsfile.c kernel/src/vfsmove.c kernel/src/vfsblock.c
 
@@ -370,12 +376,12 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # The terminal, its line editor and every command it answers. No framebuffer
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
-$(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
-                    kernel/src/cmdfs.c $(VFS_SRCS) kernel/src/surface.c \
+$(BUILD)/term_test: tests/term_test.c kernel/src/term.c \
+                    $(CMD_SRCS) $(VFS_SRCS) kernel/src/surface.c \
                     kernel/src/font.c kernel/src/region.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
-		kernel/src/cmd.c kernel/src/cmdfs.c $(VFS_SRCS) \
+		$(CMD_SRCS) $(VFS_SRCS) \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 
 # The editor on its own: insert in the middle, split a line, join two, and the
@@ -446,9 +452,10 @@ $(BUILD)/vars_test: tests/vars_test.c kernel/src/vars.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/vars_test.c kernel/src/vars.c -o $@
 
-$(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c $(HEADERS)
+$(BUILD)/kbd_test: tests/kbd_test.c kernel/src/kbd.c kernel/src/font.c $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c -o $@
+	$(CC) $(HOST_TEST_FLAGS) tests/kbd_test.c kernel/src/kbd.c \
+		kernel/src/font.c -o $@
 
 $(BUILD)/geometry_test: tests/geometry_test.c kernel/src/geometry.c $(HEADERS)
 	@mkdir -p $(BUILD)

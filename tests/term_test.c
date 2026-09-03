@@ -210,7 +210,10 @@ static void test_the_commands_answer_with_what_the_machine_knows(void)
     printf("every command prints something true\n");
     struct term term;
     term_init(&term, 60, 20);
+    struct cmd_out output;
+    cmd_out_to_term(&output, &term);
     struct cmd_context context = {
+        .out = &output,
         .term = &term,
         .uptime_seconds = 3725,
         .screen_width = 1280,
@@ -301,7 +304,10 @@ static void test_the_file_commands(void)
     term_init(&term, 60, 24);
     vfs_init(&fs);
 
-    struct cmd_context context = { .term = &term, .fs = &fs, .version = "0.20" };
+    struct cmd_out output;
+    cmd_out_to_term(&output, &term);
+    struct cmd_context context = {
+        .out = &output, .term = &term, .fs = &fs, .version = "0.20" };
 
     cmd_run(&context, "PWD");
     check(strcmp(row_of(&term, 1, row), "/") == 0, "PWD starts at the root");
@@ -380,7 +386,10 @@ static void test_the_file_commands(void)
 
     printf("with no filesystem the file commands are not offered at all\n");
     term_clear(&term);
-    struct cmd_context bare = { .term = &term, .version = "0.20" };
+    struct cmd_out bare_out;
+    cmd_out_to_term(&bare_out, &term);
+    struct cmd_context bare = {
+        .out = &bare_out, .term = &term, .version = "0.20" };
     cmd_run(&bare, "PWD");
     check(strstr(row_of(&term, 1, row), "NO SUCH COMMAND") != NULL,
           "PWD is unknown rather than crashing");
@@ -417,6 +426,133 @@ static void test_redirection_is_split_correctly(void)
           "no line at all is refused");
 }
 
+/* M25. Output goes somewhere a command does not know about, which is what makes
+ * both the arrow and the bar work for every command rather than only for ECHO.
+ */
+static void test_pipes_and_general_redirection(void)
+{
+    struct term term;
+    struct vfs fs;
+    char row[TERM_MAX_COLS + 1];
+    char text[VFS_FILE_MAX + 1];
+    term_init(&term, 60, 24);
+    vfs_init(&fs);
+    struct cmd_out output;
+    cmd_out_to_term(&output, &term);
+    struct cmd_context context = {
+        .out = &output, .term = &term, .fs = &fs, .version = "0.25" };
+
+    printf("a sink writes to a buffer instead of a screen\n");
+    char small[8];
+    struct cmd_out into;
+    cmd_out_to_buffer(&into, small, sizeof small);
+    cmd_print(&into, "ABC");
+    check(strcmp(cmd_out_text(&into), "ABC") == 0, "what was written is there");
+    check(!into.overflowed, "and it fitted");
+    cmd_print(&into, "DEFGHIJKL");
+    check(into.overflowed, "more than fits is reported");
+    check(strlen(cmd_out_text(&into)) == sizeof small - 1,
+          "and what is there is terminated rather than running off the end");
+
+    printf("any command can be written to a file, not only ECHO\n");
+    cmd_run(&context, "MKDIR WORK");
+    cmd_run(&context, "CD WORK");
+    cmd_run(&context, "WRITE PEAR.TXT A PEAR");
+    cmd_run(&context, "WRITE APPLE.TXT AN APPLE");
+    term_clear(&term);
+    cmd_run(&context, "LS > LISTING.TXT");
+    check(vfs_read(&fs, "LISTING.TXT", text, sizeof text, NULL) == VFS_OK,
+          "the listing went into a file");
+    check(strstr(text, "PEAR.TXT") != NULL, "holding what LS would have shown");
+    check(strstr(text, "APPLE.TXT") != NULL, "all of it");
+    check(strcmp(row_of(&term, 1, row), "") == 0, "and nothing went to the screen");
+
+    printf("and what lands in the file has no newline stuck on the end\n");
+    term_clear(&term);
+    cmd_run(&context, "ECHO HELLO > ONE.TXT");
+    check(vfs_read(&fs, "ONE.TXT", text, sizeof text, NULL) == VFS_OK, "written");
+    check(strcmp(text, "HELLO") == 0, "exactly what was said, and no more");
+
+    printf("a bar hands one command's output to the next\n");
+    term_clear(&term);
+    cmd_run(&context, "LS | GREP PEAR");
+    check(strstr(row_of(&term, 1, row), "PEAR.TXT") != NULL, "the line that matched");
+    check(strstr(row_of(&term, 2, row), "APPLE.TXT") == NULL, "and not the ones that did not");
+
+    printf("a filter reads a file when it is given one\n");
+    term_clear(&term);
+    cmd_run(&context, "GREP PEAR LISTING.TXT");
+    check(strstr(row_of(&term, 1, row), "PEAR.TXT") != NULL, "the same answer");
+
+    printf("and says so when nothing matched rather than printing nothing\n");
+    term_clear(&term);
+    cmd_run(&context, "GREP BANANA LISTING.TXT");
+    check(strstr(row_of(&term, 1, row), "NOTHING MATCHED") != NULL, "it says so");
+
+    printf("three stages work, and the arrow applies to the whole line\n");
+    cmd_run(&context, "WRITE LIST.TXT ZEBRA");
+    term_clear(&term);
+    cmd_run(&context, "CAT LIST.TXT | GREP ZEBRA | HEAD 1 > FOUND.TXT");
+    check(vfs_read(&fs, "FOUND.TXT", text, sizeof text, NULL) == VFS_OK,
+          "the far end of the pipe went into the file");
+    check(strcmp(text, "ZEBRA") == 0, "holding what came out of it");
+
+    printf("HEAD and TAIL take a count, or ten when nobody says\n");
+    check(vfs_write(&fs, "MANY.TXT", "L1\nL2\nL3\nL4\nL5") == VFS_OK, "five lines");
+    term_clear(&term);
+    cmd_run(&context, "HEAD 2 MANY.TXT");
+    check(strcmp(row_of(&term, 1, row), "L1") == 0, "the first");
+    check(strcmp(row_of(&term, 2, row), "L2") == 0, "and the second");
+    check(strcmp(row_of(&term, 3, row), "") == 0, "and no more");
+
+    term_clear(&term);
+    cmd_run(&context, "TAIL 2 MANY.TXT");
+    check(strcmp(row_of(&term, 1, row), "L4") == 0, "the last but one");
+    check(strcmp(row_of(&term, 2, row), "L5") == 0, "and the last");
+
+    term_clear(&term);
+    cmd_run(&context, "HEAD MANY.TXT");
+    check(strcmp(row_of(&term, 5, row), "L5") == 0,
+          "with no count it shows them all, since there are fewer than ten");
+
+    printf("SORT puts lines in order whatever order they arrived in\n");
+    check(vfs_write(&fs, "WORDS.TXT", "PEAR\nAPPLE\nMANGO") == VFS_OK, "three words");
+    term_clear(&term);
+    cmd_run(&context, "SORT WORDS.TXT");
+    check(strcmp(row_of(&term, 1, row), "APPLE") == 0, "first");
+    check(strcmp(row_of(&term, 2, row), "MANGO") == 0, "second");
+    check(strcmp(row_of(&term, 3, row), "PEAR") == 0, "third");
+
+    printf("a filter given neither a file nor a pipe says so\n");
+    term_clear(&term);
+    cmd_run(&context, "GREP SOMETHING");
+    check(strstr(row_of(&term, 1, row), "NEEDS A NAME") != NULL, "rather than nothing");
+
+    printf("CLEAR still reaches the screen even though it writes nothing\n");
+    cmd_run(&context, "ECHO SOMETHING TO WIPE");
+    cmd_run(&context, "CLEAR");
+    check(strcmp(row_of(&term, 0, row), "") == 0, "the screen is empty");
+
+    printf("an arrow with nothing after it is refused rather than guessed at\n");
+    term_clear(&term);
+    cmd_run(&context, "LS >");
+    check(strstr(row_of(&term, 1, row), "AN ARROW NEEDS") != NULL, "it says so");
+    check(strstr(row_of(&term, 1, row), "NO SUCH FILE") == NULL,
+          "rather than reporting a file called an arrow");
+    term_clear(&term);
+    cmd_run(&context, "> NAME.TXT");
+    check(strstr(row_of(&term, 1, row), "AN ARROW NEEDS") != NULL,
+          "and the same with nothing in front of it");
+
+    printf("splitting a line at the bar is exact about the blanks\n");
+    char first[TERM_INPUT_MAX];
+    const char *rest = NULL;
+    check(cmd_split_pipe("LS | GREP TXT", first, sizeof first, &rest), "there is a bar");
+    check(strcmp(first, "LS") == 0, "the part before it, trimmed");
+    check(strcmp(rest, "GREP TXT") == 0, "and the part after it, trimmed");
+    check(!cmd_split_pipe("LS", first, sizeof first, &rest), "a line with no bar");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -427,6 +563,7 @@ int main(void)
     test_the_commands_answer_with_what_the_machine_knows();
     test_redirection_is_split_correctly();
     test_the_file_commands();
+    test_pipes_and_general_redirection();
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

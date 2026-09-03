@@ -91,6 +91,16 @@ static const uint8_t glyph_colon[FONT_HEIGHT] = {
 static const uint8_t glyph_underscore[FONT_HEIGHT] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
 };
+/* The bar, for the pipe the shell understands. A vertical line down the middle
+ * with a gap at the bottom, so it does not read as the letter I. */
+static const uint8_t glyph_bar[FONT_HEIGHT] = {
+    0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x00, 0x00,
+};
+/* The backslash, which is the unshifted key the bar shares. Drawn because a
+ * key that types a character the font cannot show would put a box on screen. */
+static const uint8_t glyph_backslash[FONT_HEIGHT] = {
+    0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x00,
+};
 static const uint8_t glyph_bracket_open[FONT_HEIGHT] = {
     0x1C, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x1C,
 };
@@ -194,6 +204,12 @@ const uint8_t *font_glyph(char c)
     }
     if (c == '_') {
         return glyph_underscore;
+    }
+    if (c == '|') {
+        return glyph_bar;
+    }
+    if (c == '\\') {
+        return glyph_backslash;
     }
     if (c == '(') {
         return glyph_bracket_open;

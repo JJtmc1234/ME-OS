@@ -17,12 +17,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cmdout.h"
 #include "term.h"
 #include "vfs.h"
 
 /* Everything the commands may report, gathered by the caller, which is the only
  * thing that can see the framebuffer, the clock and the window manager. */
 struct cmd_context {
+    /* Where the output goes. The terminal when somebody is reading it, a buffer
+     * when it is going to a file or into the next command of a pipe. A command
+     * does not know which, which is the whole point. */
+    struct cmd_out *out;
+    /* What came out of the command before this one in a pipe, or NULL. A
+     * command that reads a file reads this instead when it was given no name,
+     * which is what makes `CAT NOTES | GREP TODO` mean anything. */
+    const char *input;
+    /* Still here for the commands that report the terminal's own size and for
+     * the prompt the shell echoes. Nothing writes output through it. */
     struct term *term;
     uint64_t uptime_seconds;
     uint64_t screen_width;
@@ -74,6 +85,28 @@ void cmd_format_size(uint64_t bytes, char *out, uint64_t capacity);
  * touched and the caller runs the line as it stands. */
 bool cmd_split_redirect(const char *line, char *command, uint64_t command_capacity,
                         char *target, uint64_t target_capacity);
+
+/* Pure. Splits a line at the first `|`, so `CAT NOTES | GREP TODO` runs as two
+ * commands with the first one's output handed to the second. The part before
+ * the bar is copied into `first` and `rest` is left pointing at what follows.
+ * False when there is no bar, in which case neither is touched. */
+bool cmd_split_pipe(const char *line, char *first, uint64_t first_capacity,
+                    const char **rest);
+
+/* The text a filter works on: the file it was named, or what came down the pipe
+ * when it was named none. False when neither could be had, having already said
+ * why. `what` is the command's own name, for that message. */
+bool cmd_input_text(struct cmd_context *context, const char *path,
+                    char *out, uint64_t capacity, const char *what);
+
+/* The filters. Text in, less text out, and none of them cares whether it came
+ * from a file or a pipe or where the answer is going. */
+void cmdtext_grep(struct cmd_context *context, const char *rest);
+void cmdtext_head(struct cmd_context *context, const char *rest);
+void cmdtext_tail(struct cmd_context *context, const char *rest);
+/* On its own, because it is the one that has to hold every line before it can
+ * print any of them. */
+void cmdsort_run(struct cmd_context *context, const char *path);
 
 /* The filesystem commands. In their own file because moving around a tree and
  * asking the machine what it is are two different jobs. */

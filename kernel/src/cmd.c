@@ -1,4 +1,19 @@
+/* Running a line: which command it names, and where its output goes.
+ *
+ * Two things live here. `run_one` is the list of every command the shell knows,
+ * which is the one place to look when asking what it can do. `cmd_run` is the
+ * pipeline around it: the arrow, the bars, and the buffers the output passes
+ * through between stages.
+ *
+ * Cutting the line up is in `cmdline.c`, the machine's own answers are in
+ * `cmdinfo.c`, files are in `cmdfs.c`, and the text filters are in `cmdtext.c`
+ * and `cmdsort.c`.
+ *
+ * See M19 and M25 in docs/milestones.md.
+ */
 #include "cmd.h"
+
+#include "cmdinfo.h"
 
 static bool same(const char *a, const char *b)
 {
@@ -12,282 +27,10 @@ static bool same(const char *a, const char *b)
     }
 }
 
-static char upper(char c)
+
+static void run_one(struct cmd_context *context, const char *line)
 {
-    return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
-}
-
-uint64_t cmd_split(const char *line, char *name, uint64_t capacity,
-                   const char **rest)
-{
-    if (name == NULL || capacity == 0) {
-        return 0;
-    }
-    name[0] = '\0';
-    if (rest != NULL) {
-        *rest = "";
-    }
-    if (line == NULL) {
-        return 0;
-    }
-
-    uint64_t at = 0;
-    while (line[at] == ' ') {
-        at++;
-    }
-
-    uint64_t written = 0;
-    while (line[at] != '\0' && line[at] != ' ' && written + 1 < capacity) {
-        name[written++] = upper(line[at++]);
-    }
-    name[written] = '\0';
-
-    /* Past the rest of the word if it did not fit, so the arguments are the
-     * arguments and not the tail of a command name that was too long. */
-    while (line[at] != '\0' && line[at] != ' ') {
-        at++;
-    }
-    while (line[at] == ' ') {
-        at++;
-    }
-    if (rest != NULL) {
-        *rest = line + at;
-    }
-    return written;
-}
-
-void cmd_format_size(uint64_t bytes, char *out, uint64_t capacity)
-{
-    if (out == NULL || capacity == 0) {
-        return;
-    }
-    /* Whole units with one decimal, worked out with integers. There is no
-     * floating point in this file on purpose: the kernel builds with SSE off
-     * everywhere except the one file that turns a triangle. */
-    static const char *const units[] = { "B", "KB", "MB", "GB", "TB" };
-    uint64_t unit = 0;
-    uint64_t whole = bytes;
-    uint64_t tenths = 0;
-
-    while (whole >= 1024 && unit + 1 < sizeof units / sizeof units[0]) {
-        tenths = ((whole % 1024) * 10) / 1024;
-        whole /= 1024;
-        unit++;
-    }
-
-    char digits[24];
-    uint64_t n = 0;
-    uint64_t value = whole;
-    if (value == 0) {
-        digits[n++] = '0';
-    }
-    while (value > 0 && n < sizeof digits) {
-        digits[n++] = (char)('0' + (value % 10));
-        value /= 10;
-    }
-
-    uint64_t written = 0;
-    while (n > 0 && written + 1 < capacity) {
-        out[written++] = digits[--n];
-    }
-    if (unit > 0 && written + 3 < capacity) {
-        out[written++] = '.';
-        out[written++] = (char)('0' + tenths);
-    }
-    if (written + 1 < capacity) {
-        out[written++] = ' ';
-    }
-    for (const char *p = units[unit]; *p != '\0' && written + 1 < capacity; p++) {
-        out[written++] = *p;
-    }
-    out[written] = '\0';
-}
-
-static void say_size(struct term *term, const char *label, uint64_t bytes)
-{
-    char size[32];
-    cmd_format_size(bytes, size, sizeof size);
-    term_print(term, label);
-    term_println(term, size);
-}
-
-static void command_help(struct term *term)
-{
-    term_println(term, "THE MACHINE");
-    term_println(term, "  VER      WHICH ME OS THIS IS");
-    term_println(term, "  CPU      WHAT THE PROCESSOR SAYS IT IS");
-    term_println(term, "  MEM      MEMORY THE BOOTLOADER REPORTED");
-    term_println(term, "  RES      SCREEN SIZE");
-    term_println(term, "  UPTIME   HOW LONG SINCE BOOT");
-    term_println(term, "  DATE     THE TIME OF DAY, FROM THE CLOCK CHIP");
-    term_println(term, "  WINDOWS  HOW MANY ARE OPEN");
-    term_println(term, "FILES");
-    term_println(term, "  PWD      WHERE YOU ARE");
-    term_println(term, "  LS       WHAT IS HERE");
-    term_println(term, "  CD       GO SOMEWHERE");
-    term_println(term, "  MKDIR    MAKE A DIRECTORY");
-    term_println(term, "  TOUCH    MAKE AN EMPTY FILE");
-    term_println(term, "  CAT      SHOW A FILE");
-    term_println(term, "  WRITE    PUT A LINE IN A FILE");
-    term_println(term, "  RM       DELETE A FILE OR EMPTY DIRECTORY");
-    term_println(term, "  MV       MOVE OR RENAME");
-    term_println(term, "  CP       COPY A FILE");
-    term_println(term, "  WC       COUNT LINES, WORDS AND BYTES");
-    term_println(term, "  TREE     THE SHAPE OF A DIRECTORY");
-    term_println(term, "  EDIT     OPEN A FILE IN THE EDITOR");
-    term_println(term, "  DF       HOW MUCH ROOM IS LEFT");
-    term_println(term, "THIS TERMINAL");
-    term_println(term, "  ECHO     SAY SOMETHING BACK");
-    term_println(term, "  CLEAR    EMPTY THIS SCREEN");
-    term_println(term, "  HELP     THIS LIST");
-    term_println(term, "ECHO TEXT > FILE WRITES INSTEAD OF PRINTING.");
-    term_println(term, "KEYS: CTRL ARROWS MOVE FOCUS, CTRL H HIDES,");
-    term_println(term, "      CTRL S SHOWS ALL, CTRL N AND W RESIZE,");
-    term_println(term, "      CTRL 1 TO 4 SWITCH WORKSPACE, CTRL M SENDS");
-    term_println(term, "      THIS WINDOW TO THE NEXT ONE.");
-}
-
-static void command_uptime(struct cmd_context *context)
-{
-    const uint64_t seconds = context->uptime_seconds;
-    term_print(context->term, "UP ");
-    term_print_number(context->term, seconds / 3600);
-    term_print(context->term, "H ");
-    term_print_number(context->term, (seconds / 60) % 60);
-    term_print(context->term, "M ");
-    term_print_number(context->term, seconds % 60);
-    term_println(context->term, "S");
-}
-
-static void command_mem(struct cmd_context *context)
-{
-    /* Said rather than printed as zero. A machine that could not be asked how
-     * much memory it has is a different answer from one with none. */
-    if (context->total_memory == 0) {
-        term_println(context->term, "THE BOOTLOADER REPORTED NO MEMORY MAP");
-        return;
-    }
-    say_size(context->term, "USABLE  ", context->usable_memory);
-    say_size(context->term, "TOTAL   ", context->total_memory);
-}
-
-static void command_cpu(struct cmd_context *context)
-{
-    const bool has_vendor = context->cpu_vendor != NULL &&
-                            context->cpu_vendor[0] != '\0';
-    const bool has_brand = context->cpu_brand != NULL &&
-                           context->cpu_brand[0] != '\0';
-    if (!has_vendor && !has_brand) {
-        term_println(context->term, "THE PROCESSOR WOULD NOT SAY");
-        return;
-    }
-    if (has_vendor) {
-        term_print(context->term, "VENDOR  ");
-        term_println(context->term, context->cpu_vendor);
-    }
-    if (has_brand) {
-        term_print(context->term, "BRAND   ");
-        term_println(context->term, context->cpu_brand);
-    }
-}
-
-static void command_windows(struct cmd_context *context)
-{
-    term_print(context->term, "OPEN    ");
-    term_print_number(context->term, context->windows_open);
-    term_newline(context->term);
-    term_print(context->term, "SHOWING ");
-    term_print_number(context->term, context->windows_visible);
-    term_newline(context->term);
-}
-
-bool cmd_split_redirect(const char *line, char *command, uint64_t command_capacity,
-                        char *target, uint64_t target_capacity)
-{
-    if (line == NULL || command == NULL || target == NULL ||
-        command_capacity == 0 || target_capacity == 0) {
-        return false;
-    }
-    uint64_t arrow = 0;
-    bool found = false;
-    for (uint64_t i = 0; line[i] != '\0'; i++) {
-        if (line[i] == '>') {
-            arrow = i;
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        return false;
-    }
-
-    /* Trailing blanks trimmed from the command, leading ones from the name, so
-     * `ECHO HI > NOTES` writes to NOTES and not to " NOTES". */
-    uint64_t end = arrow;
-    while (end > 0 && line[end - 1] == ' ') {
-        end--;
-    }
-    uint64_t written = 0;
-    for (uint64_t i = 0; i < end && written + 1 < command_capacity; i++) {
-        command[written++] = line[i];
-    }
-    command[written] = '\0';
-
-    uint64_t at = arrow + 1;
-    while (line[at] == ' ') {
-        at++;
-    }
-    written = 0;
-    while (line[at] != '\0' && line[at] != ' ' && written + 1 < target_capacity) {
-        target[written++] = line[at++];
-    }
-    target[written] = '\0';
-    return target[0] != '\0' && command[0] != '\0';
-}
-
-void cmd_run(struct cmd_context *context, const char *line)
-{
-    if (context == NULL || context->term == NULL) {
-        return;
-    }
-    struct term *term = context->term;
-
-    /* The prompt the line was typed at, not a fixed one, so the history shows
-     * which directory each command was run in. */
-    char echoed[TERM_MAX_COLS + TERM_INPUT_MAX + 8];
-    uint64_t written = 0;
-    for (const char *p = term->prompt; *p != '\0' && written + 1 < sizeof echoed; p++) {
-        echoed[written++] = *p;
-    }
-    for (uint64_t i = 0; line != NULL && line[i] != '\0' &&
-                         written + 1 < sizeof echoed; i++) {
-        echoed[written++] = line[i];
-    }
-    echoed[written] = '\0';
-    /* The line goes into the history before it runs, so what a command printed
-     * is underneath the command that printed it. */
-    term_println(term, echoed);
-
-    /* `ECHO HI > NOTES` is the one redirection this shell understands, and it is
-     * enough to make a file from the keyboard. Anything more general needs the
-     * output of every command to be capturable, which is a larger change than
-     * one arrow is worth. */
-    char redirected[TERM_INPUT_MAX];
-    char target[VFS_PATH_MAX];
-    if (context->fs != NULL &&
-        cmd_split_redirect(line, redirected, sizeof redirected,
-                           target, sizeof target)) {
-        char echo_name[32];
-        const char *echo_rest = "";
-        cmd_split(redirected, echo_name, sizeof echo_name, &echo_rest);
-        if (same(echo_name, "ECHO")) {
-            cmdfs_write(context, target, echo_rest);
-            return;
-        }
-        term_println(term, "ONLY ECHO CAN BE WRITTEN TO A FILE SO FAR");
-        return;
-    }
-
+    struct cmd_out *out = context->out;
     char name[32];
     const char *rest = "";
     if (cmd_split(line, name, sizeof name, &rest) == 0) {
@@ -339,13 +82,29 @@ void cmd_run(struct cmd_context *context, const char *line)
             cmdfs_wc(context, rest);
             return;
         }
+        if (same(name, "GREP") || same(name, "FIND")) {
+            cmdtext_grep(context, rest);
+            return;
+        }
+        if (same(name, "HEAD")) {
+            cmdtext_head(context, rest);
+            return;
+        }
+        if (same(name, "TAIL")) {
+            cmdtext_tail(context, rest);
+            return;
+        }
+        if (same(name, "SORT")) {
+            cmdsort_run(context, rest);
+            return;
+        }
         if (same(name, "TREE")) {
             cmdfs_tree(context, rest);
             return;
         }
         if (same(name, "EDIT")) {
             if (rest[0] == '\0') {
-                term_println(term, "EDIT NEEDS A NAME");
+                cmd_println(out, "EDIT NEEDS A NAME");
                 return;
             }
             /* Said rather than done. The shell cannot open a window, so it
@@ -371,39 +130,186 @@ void cmd_run(struct cmd_context *context, const char *line)
     }
 
     if (same(name, "HELP")) {
-        command_help(term);
+        cmdinfo_help(out);
     } else if (same(name, "VER")) {
-        term_print(term, "ME OS ");
-        term_println(term, context->version != NULL ? context->version : "UNKNOWN");
+        cmd_print(out, "ME OS ");
+        cmd_println(out, context->version != NULL ? context->version : "UNKNOWN");
     } else if (same(name, "CPU")) {
-        command_cpu(context);
+        cmdinfo_cpu(context);
     } else if (same(name, "MEM")) {
-        command_mem(context);
+        cmdinfo_mem(context);
     } else if (same(name, "RES")) {
-        term_print_number(term, context->screen_width);
-        term_print(term, "X");
-        term_print_number(term, context->screen_height);
-        term_println(term, " 32 BPP");
+        cmd_print_number(out, context->screen_width);
+        cmd_print(out, "X");
+        cmd_print_number(out, context->screen_height);
+        cmd_println(out, " 32 BPP");
     } else if (same(name, "UPTIME")) {
-        command_uptime(context);
+        cmdinfo_uptime(context);
     } else if (same(name, "DATE") || same(name, "TIME")) {
         /* A machine that could not be asked says so. A wrong clock is worse
          * than a missing one, because nothing downstream can tell. */
         if (context->date == NULL || context->date[0] == '\0') {
-            term_println(term, "THE CLOCK CHIP WOULD NOT ANSWER");
+            cmd_println(out, "THE CLOCK CHIP WOULD NOT ANSWER");
         } else {
-            term_print(term, context->date);
-            term_print(term, " ");
-            term_println(term, context->time);
+            cmd_print(out, context->date);
+            cmd_print(out, " ");
+            cmd_println(out, context->time);
         }
     } else if (same(name, "WINDOWS")) {
-        command_windows(context);
+        cmdinfo_windows(context);
     } else if (same(name, "ECHO")) {
-        term_println(term, rest);
+        cmd_println(out, rest);
     } else if (same(name, "CLEAR")) {
-        term_clear(term);
+        /* The one command that is about the screen rather than about output.
+         * There is nothing for it to write, so it reaches past the sink to the
+         * terminal, and piping it does nothing, which is right. */
+        term_clear(context->term);
     } else {
-        term_print(term, name);
-        term_println(term, ": NO SUCH COMMAND. TRY HELP.");
+        cmd_print(out, name);
+        cmd_println(out, ": NO SUCH COMMAND. TRY HELP.");
+    }
+}
+
+/* Splits a line at the first `|`, trimming the blanks either side of it.
+ *
+ * Returns false when there is no bar, in which case the whole line is the one
+ * stage. Quoting is not handled because this shell has none: a bar in a line is
+ * always a bar.
+ */
+
+static char pipe_a[VFS_FILE_MAX + 1];
+static char pipe_b[VFS_FILE_MAX + 1];
+
+void cmd_run(struct cmd_context *context, const char *line)
+{
+    if (context == NULL || context->term == NULL || context->out == NULL) {
+        return;
+    }
+    struct cmd_out *const screen = context->out;
+
+    /* The prompt the line was typed at, not a fixed one, so the history shows
+     * which directory each command was run in. */
+    char echoed[TERM_MAX_COLS + TERM_INPUT_MAX + 8];
+    uint64_t written = 0;
+    for (const char *p = context->term->prompt;
+         *p != '\0' && written + 1 < sizeof echoed; p++) {
+        echoed[written++] = *p;
+    }
+    for (uint64_t i = 0; line != NULL && line[i] != '\0' &&
+                         written + 1 < sizeof echoed; i++) {
+        echoed[written++] = line[i];
+    }
+    echoed[written] = '\0';
+    /* The line goes into the history before it runs, so what a command printed
+     * is underneath the command that printed it. */
+    term_println(context->term, echoed);
+
+    /* The arrow is taken off first, because it applies to the whole pipeline
+     * rather than to the last stage of it. `LS | GREP TXT > FOUND` writes what
+     * came out of the far end. */
+    char work[TERM_INPUT_MAX];
+    char target[VFS_PATH_MAX];
+    const bool to_file = context->fs != NULL &&
+                         cmd_split_redirect(line, work, sizeof work,
+                                            target, sizeof target);
+    if (!to_file) {
+        uint64_t at = 0;
+        for (; line != NULL && line[at] != '\0' && at + 1 < sizeof work; at++) {
+            work[at] = line[at];
+        }
+        work[at] = '\0';
+    }
+    /* An arrow that did not split is an arrow with nothing usable either side
+     * of it. Saying so beats running the line as it stands, which would take
+     * the arrow itself as an argument and report a file called `>`. */
+    if (!to_file) {
+        for (uint64_t i = 0; line[i] != '\0'; i++) {
+            if (line[i] == '>') {
+                term_println(context->term,
+                             "AN ARROW NEEDS A COMMAND AND A NAME FOR THE FILE");
+                return;
+            }
+        }
+    }
+
+    struct cmd_out *const caller_out = context->out;
+    const char *const caller_input = context->input;
+
+    const char *remaining = work;
+    const char *carried = NULL;
+    /* The buffer the last captured stage wrote into, so the newline can be
+     * trimmed off it in place. NULL when nothing was captured. */
+    char *held = NULL;
+    char stage[TERM_INPUT_MAX];
+    struct cmd_out capture;
+    bool cut = false;
+
+    for (uint64_t n = 0; ; n++) {
+        const char *next = NULL;
+        const bool more = cmd_split_pipe(remaining, stage, sizeof stage, &next);
+        if (!more) {
+            uint64_t at = 0;
+            for (; remaining[at] != '\0' && at + 1 < sizeof stage; at++) {
+                stage[at] = remaining[at];
+            }
+            stage[at] = '\0';
+        }
+
+        /* The last stage writes to the screen, unless the whole line was
+         * pointed at a file, in which case it is captured like the others and
+         * what it captured is written out afterwards. */
+        const bool last = !more;
+        if (last && !to_file) {
+            context->out = screen;
+        } else {
+            held = n % 2 == 0 ? pipe_a : pipe_b;
+            cmd_out_to_buffer(&capture, held, VFS_FILE_MAX + 1);
+            context->out = &capture;
+        }
+        context->input = carried;
+        run_one(context, stage);
+
+        if (context->out != screen) {
+            cut = cut || capture.overflowed;
+            carried = cmd_out_text(&capture);
+        }
+        if (last) {
+            break;
+        }
+        remaining = next;
+    }
+
+    context->out = caller_out;
+    context->input = caller_input;
+
+    /* Said, not swallowed. A file holding the first part of a listing is worse
+     * than one that was never written, because only the second looks wrong. */
+    if (cut) {
+        term_println(context->term,
+                     "THAT PRODUCED MORE THAN ONE FILE CAN HOLD, SO IT WAS CUT");
+    }
+    if (to_file && held != NULL) {
+        /* One trailing newline taken off.
+         *
+         * Every command ends its last line, so captured output always has a
+         * newline on the end that nobody asked for. This filesystem holds a
+         * file as lines with nothing after the last one, which is what WRITE
+         * puts in and what CAT expects to find, and a spare newline would show
+         * as a blank line every time the file was read. Only one comes off, so
+         * a file that really does end in a blank line still can.
+         */
+        uint64_t at = 0;
+        while (held[at] != '\0') {
+            at++;
+        }
+        if (at > 0 && held[at - 1] == '\n') {
+            held[at - 1] = '\0';
+        }
+        const enum vfs_result done = vfs_write(context->fs, target, held);
+        if (done != VFS_OK) {
+            term_print(context->term, target);
+            term_print(context->term, ": ");
+            term_println(context->term, vfs_explain(done));
+        }
     }
 }

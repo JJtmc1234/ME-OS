@@ -865,7 +865,14 @@ static void terminal_key(const struct window_event *event)
         return;
     }
 
+    /* Straight to the terminal to begin with. A pipe or an arrow in the line
+     * makes `cmd_run` point it somewhere else and put it back afterwards. */
+    struct cmd_out output;
+    cmd_out_to_term(&output, &terminal);
+
     struct cmd_context context = {
+        .out = &output,
+        .input = NULL,
         .term = &terminal,
         .uptime_seconds = uptime_seconds,
         .screen_width = fb_width(),

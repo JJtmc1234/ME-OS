@@ -975,6 +975,8 @@ def check_log() -> list[str]:
         "terminal ran CAT PROJECTS/NOTE.TXT",
         "editor opened TODO.TXT",
         "editor saved TODO.TXT",
+        "terminal ran LS | SORT > SORTED.TXT",
+        "terminal ran CAT SORTED.TXT | GREP TXT",
         "window moved to workspace ",
         "workspace 2",
         "floating point ready, drew the M12 triangle",
@@ -1403,7 +1405,7 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M24 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M25 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
@@ -1411,7 +1413,8 @@ def main() -> int:
           "presented through dirty regions rather than whole screen repaints, "
           "tiled into a desktop with workspaces, a shell, an editor and a clock, "
           "on a filesystem of files made of blocks that is still there after "
-          "the machine restarts")
+          "the machine restarts, with a shell whose commands can be piped "
+          "into each other and written to files")
     print("A person should still watch it boot once with make run.")
     return 0
 

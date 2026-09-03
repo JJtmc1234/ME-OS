@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "font.h"
 #include "kbd.h"
 
 static int failures;
@@ -195,9 +196,26 @@ static void test_control_is_tracked_like_shift(void)
           "and nor does the extended one");
 }
 
+/* M25. A shell that understands `A | B` with no way to type the bar
+ * understands nothing, so the key that makes one is worth a check of its own. */
+static void test_the_pipe_can_be_typed(void)
+{
+    printf("the backslash key gives a backslash, and a bar with shift\n");
+    struct kbd_key key;
+    check(kbd_translate(0x2B, false, &key), "the key translates");
+    check(key.ch == '\\', "unshifted it is a backslash");
+    check(kbd_translate(0x2B, true, &key), "and with shift held");
+    check(key.ch == '|', "it is the bar the shell splits on");
+
+    printf("and both are characters the font can actually draw\n");
+    check(font_knows('|'), "the bar has a glyph");
+    check(font_knows('\\'), "and so does the backslash");
+}
+
 int main(void)
 {
     test_shift_state();
+    test_the_pipe_can_be_typed();
     test_unshifted_keys();
     test_arithmetic_keys();
     test_arrow_keys();

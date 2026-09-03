@@ -640,6 +640,67 @@ restart and the run after it have to agree. A block count alone would not do:
 a file whose two blocks came back the wrong way round is exactly as long as one
 that did not.
 
+## M25 output that does not have to go to the screen
+
+Done. Any command can be written to a file, any command can be handed to
+another, and the filters that make that worth doing are here: GREP, HEAD, TAIL
+and SORT.
+
+`LS | SORT > NAMES.TXT` works. So does `CAT NOTES | GREP TODO`.
+
+**The whole milestone is one change.** Every command used to call
+`term_println` directly, so its output could only ever go to the terminal. That
+is why `ECHO HI > NOTES` was the only redirection the shell had: ECHO was the
+one command whose output the shell could work out for itself without running
+it. The comment in `cmd.c` said so, and said what it would take.
+
+A command now writes to a `struct cmd_out` and does not know what is on the
+other end of it. The shell points it at the terminal, or at a buffer, and that
+one change is what makes the arrow and the bar both work for every command
+without any command knowing either exists.
+
+**Two buffers are enough however long the pipeline is.** A stage reads one and
+writes the other, and the one it read is free the moment it has finished. They
+are static rather than on the stack, because twelve kilobytes is more than a
+kernel stack should be asked for and nothing here runs twice at once: there is
+one terminal and it runs one command at a time.
+
+**The arrow is taken off before the bars.** It applies to the whole pipeline
+rather than to the last stage of it, so `LS | GREP TXT > FOUND` writes what came
+out of the far end, which is what it looks like it should do.
+
+**One trailing newline comes off what lands in a file.** Every command ends its
+last line, so captured output always has a newline nobody asked for. This
+filesystem holds a file as lines with nothing after the last one, which is what
+WRITE puts in and what CAT expects to find. Keeping it would show a blank line
+every time the file was read. Only one comes off, so a file that really does end
+in a blank line still can.
+
+**CLEAR reaches past the sink on purpose.** It is the one command that is about
+the screen rather than about output, so there is nothing for it to write, and
+piping it does nothing, which is right.
+
+**A filter with no filename reads what came down the pipe.** That is what makes
+`GREP TXT NOTES.TXT` and `LS | GREP TXT` the same command asked the same
+question about text from two places. A name always wins over the pipe, which is
+what every other shell does. Given neither, it says so rather than printing
+nothing.
+
+**The keyboard could not type a bar.** Scancode 0x2B was in neither table, so
+the backslash key did nothing at all, and a shell that understands `A | B` with
+no way to type the bar understands nothing. The key is decoded now, both
+characters have glyphs, and the boot test types a real pipe at a real keyboard
+rather than trusting that it would work.
+
+**An arrow with nothing usable either side of it is reported.** It used to fall
+through and run the line as it stood, which took the arrow itself as an argument
+and reported a file called `>`.
+
+**The shell is six files now.** Cutting a line up, the machine's own answers,
+the dispatcher and its pipeline, files, text filters, and somewhere to write.
+`cmd.c` had reached six hundred lines, which is the same thing that happened to
+`vfs.c` and has the same answer.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -651,7 +712,7 @@ that did not.
 
 ## Verification status
 
-M1 to M24 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M25 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

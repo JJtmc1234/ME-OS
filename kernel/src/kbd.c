@@ -42,6 +42,10 @@ static const char printable[128] = {
      * these keys were only known with shift held, so README.TXT could not be
      * typed at the shell that had just listed it. */
     [0x33] = ',', [0x34] = '.',
+    /* The backslash key, added in M25 when the shell learned about pipes. Its
+     * shifted form is the bar, and a shell that understands `A | B` with no way
+     * to type the bar understands nothing. */
+    [0x2B] = '\\',
 };
 
 /* Only the shifted keys the calculator needs. Everything else is unaffected,
@@ -53,6 +57,7 @@ static const char shifted[128] = {
     [0x33] = '<',   /* shift and comma */
     [0x34] = '>',   /* shift and full stop */
     [0x0C] = '_',   /* shift and minus, for names with words in them */
+    [0x2B] = '|',   /* shift and backslash, the pipe */
 };
 
 static const char *named(uint8_t code)

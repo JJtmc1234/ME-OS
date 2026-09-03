@@ -192,6 +192,7 @@ type_line() {
             "/") echo "sendkey slash" ;;
             ".") echo "sendkey dot" ;;
             ">") echo "sendkey shift-dot" ;;
+            "|") echo "sendkey shift-backslash" ;;
             *)   echo "sendkey $c" ;;
         esac
         sleep 0.07
@@ -436,6 +437,11 @@ rectangle_centre() {
     # M23. Written at the root, so the second boot finds it in the one listing
     # the kernel prints when it loads a disk.
     type_line "write /persist.txt the disk kept this"
+    # M25. A pipe and an arrow, both on commands that never had either. LS is
+    # not ECHO, and the file it writes has to hold what LS would have shown.
+    type_line "ls | sort > sorted.txt"
+    type_line "cat sorted.txt | grep txt"
+    type_line "head 2 sorted.txt"
     type_line "df"
     type_line "date"
     sleep 2
