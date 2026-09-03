@@ -6,8 +6,9 @@
  * to. See M19 in docs/milestones.md.
  *
  * Every command reports something the kernel actually knows. Nothing here
- * invents a filesystem, a process list or a network, because there are none, and
- * a shell that answers questions the machine cannot answer is a mock up.
+ * invents a process list or a network, because there are none, and a shell that
+ * answers questions the machine cannot answer is a mock up. The filesystem is
+ * real, and since M23 so is the disk under it.
  */
 #ifndef ME_CMD_H
 #define ME_CMD_H
@@ -42,9 +43,15 @@ struct cmd_context {
     /* Set by EDIT to the file it wants opened. The shell cannot open a window,
      * so it says what it wants and the caller, which can, does it. */
     char open_editor[VFS_PATH_MAX];
-    /* The filesystem the file commands act on. In memory, because there is no
-     * disk driver yet, and real all the same. */
+    /* The filesystem the file commands act on. */
     struct vfs *fs;
+    /* The disk it is saved to, as facts rather than as a device, so the
+     * commands can be tested without one anywhere near them. An empty model
+     * means the machine found no disk, which DF says plainly rather than
+     * printing a size of nothing. */
+    const char *disk_model;
+    uint64_t disk_sectors;
+    uint64_t disk_sector_bytes;
 };
 
 /* Runs one line. An empty line is not an error and prints nothing extra, which

@@ -300,17 +300,31 @@ void cmdfs_tree(struct cmd_context *context, const char *path)
 void cmdfs_df(struct cmd_context *context)
 {
     struct term *term = context->term;
-    const uint64_t used = vfs_used_nodes(context->fs);
     term_print(term, "ENTRIES ");
-    term_print_number(term, used);
+    term_print_number(term, vfs_used_nodes(context->fs));
     term_print(term, " OF ");
     term_print_number(term, VFS_MAX_NODES);
     term_newline(term);
     term_print(term, "PER FILE ");
     term_print_number(term, VFS_FILE_MAX);
     term_println(term, " BYTES");
-    /* Said every time, because it is the one thing about this filesystem that
-     * will surprise somebody who has used another one. */
-    term_println(term, "IN MEMORY ONLY. THERE IS NO DISK DRIVER YET,");
-    term_println(term, "SO NONE OF THIS SURVIVES A RESTART.");
+
+    /* The one thing about this filesystem that will surprise somebody, said
+     * every time. Which of the two it is depends on the machine, and getting it
+     * the wrong way round would either promise a disk that is not there or hide
+     * one that is. */
+    if (context->disk_model == NULL || context->disk_model[0] == '\0') {
+        term_println(term, "NO DISK FOUND, SO THIS IS IN MEMORY ONLY");
+        term_println(term, "AND NONE OF IT SURVIVES A RESTART.");
+        return;
+    }
+    term_print(term, "DISK ");
+    term_println(term, context->disk_model);
+    term_print(term, "     ");
+    term_print_number(term, context->disk_sectors);
+    term_print(term, " SECTORS OF ");
+    term_print_number(term, context->disk_sector_bytes);
+    term_println(term, " BYTES");
+    term_println(term, "SAVED AFTER EVERY CHANGE, SO IT SURVIVES");
+    term_println(term, "A RESTART. THERE IS NOTHING TO TYPE.");
 }

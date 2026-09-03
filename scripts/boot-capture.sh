@@ -96,6 +96,15 @@ MOUSE_DY="${MOUSE_DY:--60}"
 # Which key to inject. tests/check_boot.py expects this letter on screen.
 KEY="${KEY:-a}"
 DEBUG_LOG="$BUILD_DIR/debug.log"
+# The second boot writes its own log. Proving the disk survives a restart needs
+# two runs, and one log with two boots in it cannot say which line came from
+# which.
+DEBUG_LOG_AGAIN="$BUILD_DIR/debug-again.log"
+# Its own disk, not the one `make run` keeps. This one is blanked every run,
+# and blanking the disk somebody has been using would be a poor way to find
+# that out.
+DISK="$BUILD_DIR/me-os-test-disk.img"
+SHOT_RESTART="${SHOT_RESTART:-$BUILD_DIR/screen-restart.ppm}"
 SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
@@ -104,6 +113,12 @@ BOOT_WAIT="${BOOT_WAIT:-16}"
 fail() { echo "boot-capture: $*" >&2; exit 1; }
 
 [ -f "$ISO" ] || fail "missing $ISO, run make first"
+
+# A blank disk for every run. The whole point of the second boot is that this
+# run put something on it, and a disk left over from last time would pass that
+# check without the kernel having written a byte.
+truncate -s 0 "$DISK" 2>/dev/null || fail "could not make a disk at $DISK"
+truncate -s 4M "$DISK" || fail "could not size the disk at $DISK"
 command -v "$QEMU" >/dev/null 2>&1 || fail "missing $QEMU, run make check-tools"
 
 : "${OVMF_CODE:?set OVMF_CODE, or run this through make test}"
@@ -418,6 +433,10 @@ rectangle_centre() {
     sleep 1
     type_line "cat todo.txt"
     type_line "wc todo.txt"
+    # M23. Written at the root, so the second boot finds it in the one listing
+    # the kernel prints when it loads a disk.
+    type_line "write /persist.txt the disk kept this"
+    type_line "df"
     type_line "date"
     sleep 2
 
@@ -438,10 +457,37 @@ rectangle_centre() {
         -machine q35 -m 512M -cdrom "$ISO" -boot d \
         -drive if=pflash,unit=0,format=raw,readonly=on,file="$OVMF_CODE" \
         -drive if=pflash,unit=1,format=raw,file="$OVMF_VARS_LOCAL" \
+        -drive file="$DISK",format=raw,if=none,id=medisk \
+        -device isa-ide,id=meide -device ide-hd,drive=medisk,bus=meide.0 \
         -display none -monitor stdio \
         -debugcon "file:$DEBUG_LOG" \
         -serial "file:$SERIAL_LOG" \
         -no-reboot -no-shutdown > /dev/null
+
+# M23. The same disk, a second time, with the CD still the only boot device.
+#
+# This is the whole milestone in one step. The kernel that comes up here was
+# given nothing but the ISO and a disk the last run wrote, so anything it knows
+# about /PERSIST.TXT it read off that disk. Nothing is typed: if the file has to
+# be asked for it has already been proved.
+echo "boot-capture: restarting with the same disk to see what survived"
+{
+    sleep "$BOOT_WAIT"
+    sleep 4
+    echo "screendump $SHOT_RESTART"
+    sleep 2
+    echo "quit"
+} | "$QEMU" \
+        -machine q35 -m 512M -cdrom "$ISO" -boot d \
+        -drive if=pflash,unit=0,format=raw,readonly=on,file="$OVMF_CODE" \
+        -drive if=pflash,unit=1,format=raw,file="$OVMF_VARS_LOCAL" \
+        -drive file="$DISK",format=raw,if=none,id=medisk \
+        -device isa-ide,id=meide -device ide-hd,drive=medisk,bus=meide.0 \
+        -display none -monitor stdio \
+        -debugcon "file:$DEBUG_LOG_AGAIN" \
+        -no-reboot -no-shutdown > /dev/null
+
+[ -s "$SHOT_RESTART" ] || fail "QEMU produced no screenshot at $SHOT_RESTART"
 
 [ -s "$SHOT_BOOT" ] || fail "QEMU produced no screenshot at $SHOT_BOOT"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"
@@ -480,3 +526,7 @@ echo "boot-capture: steered the rectangle with $STEER_DOWN_KEYS then $STEER_LEFT
 echo "boot-capture: wrapped it with down then $WRAP_LEFT_PRESSES presses of left"
 echo "boot-capture: dragged the rectangle -180 30, released it, then moved the pointer 80 0"
 echo "boot-capture: showed all four windows, hid two, moved focus, and showed them again"
+if [ -s "$DEBUG_LOG_AGAIN" ]; then
+    echo "boot-capture: kernel log of the second boot"
+    sed 's/^/    /' "$DEBUG_LOG_AGAIN"
+fi

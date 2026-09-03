@@ -52,6 +52,10 @@ void vfs_init(struct vfs *fs)
     root->next_sibling = VFS_NONE;
     root->length = 0;
     fs->cwd = 0;
+    /* Nothing has changed, because nothing has happened yet. Reset here rather
+     * than left alone so that reusing a filesystem does not start it looking
+     * like it has unsaved work in it. */
+    fs->changes = 0;
 }
 
 const struct vfs_node *vfs_get(const struct vfs *fs, int16_t node)
@@ -358,6 +362,7 @@ static enum vfs_result make(struct vfs *fs, const char *path, enum vfs_kind kind
     if (out != NULL) {
         *out = made;
     }
+    fs->changes++;
     return VFS_OK;
 }
 
@@ -426,6 +431,7 @@ enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
         node->data[node->length + i] = text[i];
     }
     node->length += (uint32_t)adding;
+    fs->changes++;
     return VFS_OK;
 }
 
@@ -489,6 +495,7 @@ enum vfs_result vfs_remove(struct vfs *fs, const char *path)
 
     unlink_from_parent(fs, at);
     fs->nodes[at].used = false;
+    fs->changes++;
     return VFS_OK;
 }
 
@@ -532,6 +539,7 @@ enum vfs_result vfs_move(struct vfs *fs, const char *from, const char *to)
     }
     fs->nodes[at].name[length] = '\0';
     link_into(fs, parent, at);
+    fs->changes++;
     return VFS_OK;
 }
 

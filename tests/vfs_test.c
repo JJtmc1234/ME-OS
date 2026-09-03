@@ -372,6 +372,57 @@ static void test_moving_and_copying(void)
     check(vfs_copy(&fs, "/GONE", "/X") == VFS_NOT_FOUND, "and one that is not there");
 }
 
+/* The counter the automatic save reads. What matters is not that it counts, but
+ * that a refused operation does not move it. If it did, every mistyped command
+ * would write the whole filesystem to the disk for nothing, and worse, a
+ * command that failed would look from the outside exactly like one that
+ * worked. */
+static void test_only_real_changes_are_counted(void)
+{
+    printf("every change moves the counter and nothing else does\n");
+    vfs_init(&fs);
+    check(fs.changes == 0, "a new filesystem has changed nothing");
+
+    const uint32_t start = fs.changes;
+    check(vfs_mkdir(&fs, "/WORK") == VFS_OK, "making a directory");
+    check(fs.changes == start + 1, "  counts once");
+    check(vfs_create(&fs, "/WORK/A.TXT") == VFS_OK, "making a file");
+    check(fs.changes == start + 2, "  counts once");
+    check(vfs_write(&fs, "/WORK/A.TXT", "HELLO") == VFS_OK, "writing to it");
+    check(fs.changes > start + 2, "  counts");
+    uint32_t at = fs.changes;
+    check(vfs_append(&fs, "/WORK/A.TXT", " AGAIN") == VFS_OK, "appending");
+    check(fs.changes == at + 1, "  counts once");
+    at = fs.changes;
+    check(vfs_move(&fs, "/WORK/A.TXT", "/WORK/B.TXT") == VFS_OK, "moving it");
+    check(fs.changes == at + 1, "  counts once");
+    at = fs.changes;
+    check(vfs_copy(&fs, "/WORK/B.TXT", "/WORK/C.TXT") == VFS_OK, "copying it");
+    check(fs.changes > at, "  counts");
+    at = fs.changes;
+    check(vfs_remove(&fs, "/WORK/C.TXT") == VFS_OK, "removing it");
+    check(fs.changes == at + 1, "  counts once");
+
+    printf("and a command that was refused changed nothing to save\n");
+    at = fs.changes;
+    check(vfs_mkdir(&fs, "/WORK") == VFS_EXISTS, "a directory that is there");
+    check(vfs_remove(&fs, "/NOWHERE") == VFS_NOT_FOUND, "removing nothing");
+    check(vfs_remove(&fs, "/WORK") == VFS_NOT_EMPTY, "removing a full directory");
+    check(vfs_move(&fs, "/NOWHERE", "/SOMEWHERE") == VFS_NOT_FOUND, "moving nothing");
+    check(vfs_copy(&fs, "/WORK", "/COPY") == VFS_IS_A_DIRECTORY, "copying a directory");
+    check(vfs_write(&fs, "/WORK", "TEXT") == VFS_IS_A_DIRECTORY, "writing to one");
+    check(vfs_mkdir(&fs, "/WORK/") == VFS_EXISTS, "a trailing slash on one");
+    check(vfs_mkdir(&fs, "/THIS-NAME-IS-FAR-TOO-LONG-TO-FIT-IN-A-NODE") == VFS_BAD_NAME,
+          "a name too long to hold");
+    check(fs.changes == at, "none of them moved the counter");
+
+    printf("nor does looking at it\n");
+    char out[VFS_FILE_MAX + 1];
+    check(vfs_read(&fs, "/WORK/B.TXT", out, sizeof out, NULL) == VFS_OK, "reading");
+    check(vfs_chdir(&fs, "/WORK") == VFS_OK, "or moving about in it");
+    check(fs.changes == at, "so the disk is not written for nothing");
+}
+
 int main(void)
 {
     test_an_empty_filesystem_is_a_root_and_nothing_else();
@@ -383,6 +434,7 @@ int main(void)
     test_moving_and_copying();
     test_the_filesystem_fills_up_honestly();
     test_nonsense_is_refused();
+    test_only_real_changes_are_counted();
 
     if (failures > 0) {
         printf("\n%d filesystem check(s) FAILED\n", failures);

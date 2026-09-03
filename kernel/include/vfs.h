@@ -1,15 +1,15 @@
-/* A filesystem that lives in memory.
+/* The filesystem: directories, files, and the paths that reach them.
  *
- * There is no disk driver yet, so there is nothing for a filesystem to sit on.
- * This is a real one all the same: real directories, real files, real path
- * resolution with `.` and `..`, real errors when a path is wrong. It is what a
- * machine has before it has a disk, and it is what lets PWD, LS, CD and MKDIR
- * mean something instead of printing an answer somebody wrote down.
+ * Everything here works on the copy in memory. That was all there was in M20,
+ * and the commands said so every time DF was typed. M23 put a disk under it:
+ * `vfsdisk.c` writes this out and reads it back, and the shell saves after
+ * anything that changed something.
  *
- * Nothing here survives a reboot, and the commands say so. A filesystem that
- * quietly forgot everything would be worse than no filesystem at all.
+ * Nothing about a disk is in this file, deliberately. A filesystem that had to
+ * reach a controller to make a directory could not be tested without one, and
+ * the rules about names, paths and what may be deleted are the same either way.
  *
- * See M20 in docs/milestones.md.
+ * See M20 and M23 in docs/milestones.md.
  */
 #ifndef ME_VFS_H
 #define ME_VFS_H
@@ -68,6 +68,14 @@ struct vfs_node {
 struct vfs {
     struct vfs_node nodes[VFS_MAX_NODES];
     int16_t cwd;
+    /* How many times anything in here has actually changed. Every operation
+     * that succeeds moves it and every one that is refused does not.
+     *
+     * It exists so the shell can save to the disk only when there is something
+     * to save. The alternative is for each command to remember to say it
+     * changed something, and the one that forgets is the one that loses a file
+     * on the next restart. */
+    uint32_t changes;
 };
 
 /* An empty filesystem holding nothing but the root directory. */

@@ -30,10 +30,12 @@
 #include "calc.h"
 #include "compositor.h"
 #include "cmd.h"
+#include "ata.h"
 #include "cpu.h"
 #include "editor.h"
 #include "rtc.h"
 #include "vfs.h"
+#include "vfsdisk.h"
 #include "desktop.h"
 #include "cursor.h"
 #include "fb.h"
@@ -175,6 +177,54 @@ static uint64_t total_memory_bytes;
 static uint64_t memory_regions;
 static bool launcher_open;
 static struct vfs filesystem;
+
+/* The disk the filesystem is saved to, and the drive underneath it.
+ *
+ * Both are left empty when there is nothing to find, and `disk_present` is
+ * false then, so SAVE and LOAD say there is no disk rather than doing nothing
+ * and looking like they worked. */
+static struct ata_drive drive;
+static struct disk storage;
+
+/* Defined further down, next to the terminal that calls it most. */
+static void save_the_filesystem(void);
+
+/* Looks in the four places a legacy IDE disk can be, and takes the first one
+ * that is not the CD the machine booted from.
+ *
+ * Four rather than one because which socket a disk lands on is up to whoever
+ * set the machine up, and a driver that only looks at the primary master is a
+ * driver that works on one person's configuration. */
+static void find_the_disk(void)
+{
+    static const struct { uint16_t io; uint16_t control; bool slave; } sockets[] = {
+        { ATA_PRIMARY_IO,   ATA_PRIMARY_CONTROL,   false },
+        { ATA_PRIMARY_IO,   ATA_PRIMARY_CONTROL,   true  },
+        { ATA_SECONDARY_IO, ATA_SECONDARY_CONTROL, false },
+        { ATA_SECONDARY_IO, ATA_SECONDARY_CONTROL, true  },
+    };
+
+    for (uint64_t i = 0; i < sizeof sockets / sizeof sockets[0]; i++) {
+        if (!ata_probe(&drive, sockets[i].io, sockets[i].control,
+                       sockets[i].slave)) {
+            continue;
+        }
+        ata_as_disk(&drive, &storage);
+        log_str("me-os: disk ");
+        log_str(drive.model[0] != '\0' ? drive.model : "UNNAMED");
+        log_str(", ");
+        log_dec(drive.sectors);
+        log_str(" sectors of ");
+        log_dec(DISK_SECTOR);
+        log_str(" bytes\n");
+        return;
+    }
+    /* Said out loud. A machine with no disk is a perfectly good machine and
+     * this is the same one M20 through M22 ran on, but somebody reading the log
+     * after a SAVE that would not work needs to find the reason in it. */
+    log_str("me-os: no disk found, so the filesystem is memory only\n");
+}
+
 static struct editor text_editor;
 static WindowId editor_window_id;
 static struct rtc_time clock_time;
@@ -773,6 +823,9 @@ static void terminal_key(const struct window_event *event)
         .windows_visible = desktop_visible_count(&desktop),
         .cpu_vendor = cpu_vendor_text,
         .cpu_brand = cpu_brand_text,
+        .disk_model = drive.present ? drive.model : "",
+        .disk_sectors = drive.sectors,
+        .disk_sector_bytes = DISK_SECTOR,
         .version = ME_OS_VERSION,
         .fs = &filesystem,
         .date = clock_date,
@@ -799,7 +852,39 @@ static void terminal_key(const struct window_event *event)
     log_str("me-os: terminal ran ");
     log_str(line);
     log_str("\n");
+    save_the_filesystem();
     terminal_paint();
+}
+
+/* Writes the filesystem out, but only when there is something to write.
+ *
+ * Called after anything that could have changed a file, rather than left to a
+ * SYNC nobody remembers to type. A machine that loses an afternoon's work
+ * because you shut it down without a magic word is a machine nobody should have
+ * to learn, and the counter in `struct vfs` is what makes doing it this way
+ * cost nothing when nothing changed.
+ *
+ * Failures are reported and not hidden. A save that quietly did not happen is
+ * the same as no disk at all, except that you find out later.
+ */
+static uint32_t saved_at;
+
+static void save_the_filesystem(void)
+{
+    if (!disk_present(&storage) || filesystem.changes == saved_at) {
+        return;
+    }
+    const enum vfsdisk_result done = vfsdisk_save(&filesystem, &storage);
+    if (done == VFSDISK_OK) {
+        saved_at = filesystem.changes;
+        log_str("me-os: filesystem saved, ");
+        log_dec(vfs_used_nodes(&filesystem));
+        log_str(" entries\n");
+        return;
+    }
+    log_str("me-os: FAILED to save the filesystem: ");
+    log_str(vfsdisk_explain(done));
+    log_str("\n");
 }
 
 static void drain_terminal_events(void)
@@ -874,6 +959,7 @@ static void editor_save(void)
     log_str("me-os: editor saved ");
     log_str(text_editor.path);
     log_str("\n");
+    save_the_filesystem();
 }
 
 /* Opens a file in the editor and puts the editor in front of somebody. */
@@ -1685,20 +1771,58 @@ void kmain(void)
     cpu_vendor(cpu_vendor_text, sizeof cpu_vendor_text);
     cpu_brand(cpu_brand_text, sizeof cpu_brand_text);
     read_memory_map();
-    /* A filesystem with something in it, so LS has an answer the first time it
-     * is asked. Everything here is written by the kernel at boot: it is a real
-     * tree in memory, not a picture of one, and it is gone when the machine
-     * restarts because there is no disk driver yet. */
+    /* The disk first, because what is on it decides whether the tree below gets
+     * built at all. A machine that has been used before comes back as it was,
+     * and only a machine that has not gets the starting one. */
+    find_the_disk();
     vfs_init(&filesystem);
-    if (vfs_mkdir(&filesystem, "/HOME") != VFS_OK ||
-        vfs_mkdir(&filesystem, "/DOCS") != VFS_OK ||
-        vfs_mkdir(&filesystem, "/TMP") != VFS_OK ||
-        vfs_write(&filesystem, "/DOCS/README.TXT",
-                  "ME OS " ME_OS_VERSION ". A TILING DESKTOP AND A SHELL.") != VFS_OK ||
-        vfs_write(&filesystem, "/DOCS/KEYS.TXT",
-                  "CTRL ARROWS MOVE FOCUS. CTRL H HIDES. CTRL S SHOWS ALL.") != VFS_OK ||
-        vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
-        fail("could not lay out the filesystem");
+
+    /* What was here last time, if there is a disk and it holds ours.
+     *
+     * Anything else falls through to the tree below. A disk that is blank, or
+     * somebody else's, or written by a build with different limits, is not a
+     * reason to refuse to start: it is a reason to start with nothing on it and
+     * say so. The one thing not done here is writing over it, because a disk
+     * this build cannot read may still be one somebody wants. */
+    const enum vfsdisk_result opened = vfsdisk_load(&filesystem, &storage);
+    if (opened == VFSDISK_OK) {
+        log_str("me-os: filesystem loaded from disk, ");
+        log_dec(vfs_used_nodes(&filesystem));
+        log_str(" entries\n");
+        /* What is actually on it, not only how much. A count proves a disk was
+         * read. Names prove it is the disk this machine wrote, which is the
+         * thing worth knowing after a restart. */
+        log_str("me-os: disk holds");
+        for (int16_t child = vfs_first_child(&filesystem, 0); child != VFS_NONE;
+             child = vfs_next_sibling(&filesystem, child)) {
+            log_str(" ");
+            log_str(vfs_get(&filesystem, child)->name);
+        }
+        log_str("\n");
+        /* Where the last session was standing is not saved, so start somewhere
+         * that is certainly there. */
+        if (vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
+            (void)vfs_chdir(&filesystem, "/");
+        }
+    } else {
+        if (disk_present(&storage)) {
+            log_str("me-os: nothing loaded from the disk: ");
+            log_str(vfsdisk_explain(opened));
+            log_str("\n");
+        }
+        if (vfs_mkdir(&filesystem, "/HOME") != VFS_OK ||
+            vfs_mkdir(&filesystem, "/DOCS") != VFS_OK ||
+            vfs_mkdir(&filesystem, "/TMP") != VFS_OK ||
+            vfs_write(&filesystem, "/DOCS/README.TXT",
+                      "ME OS " ME_OS_VERSION ". A TILING DESKTOP AND A SHELL.") != VFS_OK ||
+            vfs_write(&filesystem, "/DOCS/KEYS.TXT",
+                      "CTRL ARROWS MOVE FOCUS. CTRL H HIDES. CTRL S SHOWS ALL.") != VFS_OK ||
+            vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
+            fail("could not lay out the filesystem");
+        }
+        /* Onto the disk straight away, so a fresh machine has a filesystem on
+         * it rather than one that only appears after the first command. */
+        save_the_filesystem();
     }
 
     term_init(&terminal, TERM_MAX_COLS, TERM_MAX_ROWS);

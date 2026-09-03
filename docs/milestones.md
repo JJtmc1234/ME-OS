@@ -369,9 +369,10 @@ an app for the rest of the run would be worse.
 Done. PWD, LS, CD, MKDIR, TOUCH, CAT, WRITE, RM and DF, and `ECHO TEXT > FILE`
 to write one from the keyboard.
 
-None of it is a mock up. There is no disk driver yet, so there is nothing for a
-filesystem to sit on, and the answer was to build a real one in memory rather
-than to print what a filesystem would have said. It has real directories, real
+None of it is a mock up. There was no disk driver when this was built, so there
+was nothing for a filesystem to sit on, and the answer was to build a real one in
+memory rather than to print what a filesystem would have said. M23 put a disk
+under it. It has real directories, real
 files, real path resolution with `.` and `..`, and real errors when a path is
 wrong. It is what a machine has before it has a disk.
 
@@ -496,6 +497,81 @@ The test does what the app was doing. It draws through every surface call an app
 could make on a surface it no longer owns, then checks the window that stayed is
 pixel for pixel as it was. Without the fix it fails.
 
+## M23 a disk, so the machine remembers
+
+Done. There is an ATA driver, an on disk format, and a filesystem that is still
+there after the machine restarts. DF has been apologising for this since M20 and
+now it has something else to say.
+
+**The format is written a byte at a time.** A header sector, then one record per
+node at sector `1 + 2 * i`. Not a copy of the structures, because a C structure
+has padding the compiler chooses and a disk written by one build would be read
+crooked by the next. Every number is little endian at an offset the source
+names, and node records are two sectors when a node needs less than one and a
+half, because simple arithmetic is worth more here than density. Anybody can
+check `1 + 2 * i` against a hex dump when something has gone wrong.
+
+The header records the limits the filesystem was built with. A disk written by a
+build with a different node count is refused rather than read as though the
+fields were where this build expects them, which would read one file's contents
+as another file's name.
+
+**A free node is written as nothing at all.** Deleting a file marks its node free
+without clearing it, so its old contents are still in memory. Writing them out
+would put deleted files on the disk where somebody could read them back. The
+test writes a file, deletes it, saves, and searches the whole disk image for the
+text.
+
+**Nothing off a disk is believed until the shape has been checked.** This is the
+half that matters. Every walk in `vfs.c` follows `parent`, `first_child` and
+`next_sibling` without checking them, which is right, because nothing inside the
+kernel can make them wrong. A disk can. A parent pointing at its own child makes
+`vfs_path_of` loop forever and a first child of five thousand reads past the end
+of the node table. Neither shows up as a wrong answer. Both take the machine
+down.
+
+So `vfsdisk_sound` checks the whole arrangement before anything walks it: every
+link in range and in use, every parent a directory, no loop in the parents, no
+loop in a sibling list, and every node listed exactly once by the parent it
+claims. The test breaks one field at a time, twelve ways, and each one has to
+be refused.
+
+**A failure that touched nothing leaves the filesystem alone.** A disk that will
+not answer at all is not a reason to empty a working filesystem, and finding out
+which of the two had happened is what the second version of that test was for.
+Once reading has started, any failure leaves it empty rather than half read,
+because half a filesystem looks exactly like a whole one.
+
+**Saving happens by itself.** `struct vfs` counts changes, every operation that
+succeeds moves the counter and every one that is refused does not, and the shell
+writes the disk when the number moved. There is no SYNC to remember. A machine
+that loses an afternoon's work because you did not type a magic word is a machine
+nobody should have to learn.
+
+**The machine QEMU gives you does not have an IDE controller.** The q35 chipset
+has AHCI and nothing at 0x1F0, which the driver found out by looking: the first
+boot with a disk attached reported no disk at all. The answer was not to change
+the machine, which would have meant retesting M1 through M22 on different
+hardware. It was `-device isa-ide`, which hangs a legacy controller off the LPC
+bridge q35 already has. Same machine, same ISO, and a disk at the ports the
+driver knows.
+
+VirtualBox needed nothing special. Its IDE controller is real, and the disk goes
+on the secondary channel so it is not sharing a cable with the CD.
+
+**Every wait in the driver is bounded.** A controller that is not there leaves
+the bus floating and every read comes back as 0xFF, which has the busy bit set.
+An unbounded wait for "not busy" would hang the kernel before it drew anything,
+on every machine without an IDE controller. Asking is allowed to fail. Hanging is
+not.
+
+**The test boots twice.** The first run writes a file and the disk is blanked
+before it, so nothing is left over from last time. The second run is handed the
+ISO and that disk and nothing else, and has to report the file in the listing it
+prints when it loads. The check also fails if the first boot loaded anything,
+because that would mean the disk was not blank and the second boot proved
+nothing.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -507,7 +583,7 @@ pixel for pixel as it was. Without the fix it fails.
 
 ## Verification status
 
-M1 to M22 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M23 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 
@@ -525,7 +601,9 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow.
+  overflow. Twenty host programs run in all now, one per part, and the newest
+  of them writes a filesystem to a disk made of memory and then breaks one
+  field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the
   mouse, types two sums, two conditionals, an assignment and two lines that use
   what it stored, steers the rectangle across two edges, drags and releases it,
@@ -536,3 +614,9 @@ Two kinds of test run:
   It also samples the desktop and two opaque overlapping windows to prove M14's
   local surfaces and bottom-to-top composition, then samples before and after
   click-to-raise to prove M15's focus and targeting path.
+
+  Since M23 it boots twice. The disk is blanked before the first run, which
+  writes a file to it, and the second run is handed the ISO and that disk and
+  nothing else. The check fails if the first boot loaded anything, because a
+  disk left over from an earlier run would pass without the kernel having
+  written a byte.

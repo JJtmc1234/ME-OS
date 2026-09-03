@@ -117,6 +117,8 @@ help:
 	@echo "make            build $(ISO)"
 	@echo "make iso        the same thing, said plainly"
 	@echo "make run        boot the ISO in QEMU with a window"
+	@echo "                it saves its filesystem to $(DISK),"
+	@echo "                which is kept between runs and removed by make clean"
 	@echo "make run-iso    the same, and never anything but the ISO"
 	@echo "make run-bios   boot the same ISO through BIOS instead of UEFI"
 	@echo "make run-vbox   boot the same ISO in VirtualBox"
@@ -252,12 +254,31 @@ $(OVMF_LOCAL):
 	cp $(OVMF_VARS) $(OVMF_LOCAL)
 	chmod u+w $(OVMF_LOCAL)
 
+# The disk ME OS saves its filesystem to, kept between runs on purpose. That is
+# the whole point of it: what you do in ME OS is still there next time.
+#
+# q35 has no IDE controller, only AHCI, so there is nothing at the ports the
+# driver knows. `isa-ide` hangs a legacy controller off the LPC bridge q35
+# already has, which is how the machine stays exactly the one M1 through M22
+# were tested on.
+DISK := $(BUILD)/me-os-disk.img
+DISK_MB := 4
+
+$(DISK):
+	@mkdir -p $(BUILD)
+	truncate -s $(DISK_MB)M $@
+	@echo "made a $(DISK_MB) MB disk at $@. ME OS saves its filesystem here."
+
+QEMU_DISK := -drive file=$(DISK),format=raw,if=none,id=medisk \
+             -device isa-ide,id=meide -device ide-hd,drive=medisk,bus=meide.0
+
 QEMU_COMMON := -machine q35 -m 512M -cdrom $(ISO) -boot d \
                -drive if=pflash,unit=0,format=raw,readonly=on,file=$(OVMF_CODE) \
                -drive if=pflash,unit=1,format=raw,file=$(OVMF_LOCAL) \
+               $(QEMU_DISK) \
                -no-reboot -no-shutdown
 
-run: $(ISO) $(OVMF_LOCAL)
+run: $(ISO) $(OVMF_LOCAL) $(DISK)
 	@test -n "$(OVMF_CODE)" || { echo "no OVMF firmware found. Run make check-tools." >&2; exit 1; }
 	$(QEMU) $(QEMU_COMMON) -debugcon stdio
 
@@ -268,12 +289,12 @@ run-iso: run
 # The other half of the hybrid image. No OVMF, so QEMU's own SeaBIOS boots it,
 # which is the path VirtualBox takes by default and the one a real machine takes
 # when its firmware is set to legacy.
-run-bios: $(ISO)
-	$(QEMU) -machine q35 -m 512M -cdrom $(ISO) -boot d \
+run-bios: $(ISO) $(DISK)
+	$(QEMU) -machine q35 -m 512M -cdrom $(ISO) -boot d $(QEMU_DISK) \
 		-no-reboot -no-shutdown -debugcon stdio
 
 # Same, with the kernel log on the terminal through the serial port.
-run-serial: $(ISO) $(OVMF_LOCAL)
+run-serial: $(ISO) $(OVMF_LOCAL) $(DISK)
 	$(QEMU) $(QEMU_COMMON) -serial stdio
 
 # The same ISO in VirtualBox, in a machine of its own. The script needs no root,
@@ -377,6 +398,14 @@ $(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c $(HEADERS)
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
+$(BUILD)/vfsdisk_test: tests/vfsdisk_test.c kernel/src/vfsdisk.c \
+                       kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
+                       kernel/src/disk.c kernel/src/vfs.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/vfsdisk_test.c kernel/src/vfsdisk.c \
+		kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
+		kernel/src/disk.c kernel/src/vfs.c -o $@
+
 $(BUILD)/cpu_test: tests/cpu_test.c kernel/src/cpu.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) -DME_NO_CPUID tests/cpu_test.c kernel/src/cpu.c -o $@
@@ -449,7 +478,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
            $(BUILD)/shell_test $(BUILD)/desktop_test \
            $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
-           $(BUILD)/editor_test $(BUILD)/rtc_test
+           $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -465,6 +494,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/shell_test
 	$(BUILD)/desktop_test
 	$(BUILD)/vfs_test
+	$(BUILD)/vfsdisk_test
 	$(BUILD)/editor_test
 	$(BUILD)/rtc_test
 	$(BUILD)/term_test

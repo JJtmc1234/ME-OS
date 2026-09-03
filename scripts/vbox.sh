@@ -9,14 +9,23 @@
 # machine other than the one named below. The name is fixed and specific so this
 # can never act on somebody else's virtual machine.
 #
-# The hardware is deliberately plain: no disk, no network, no audio, no USB. A
+# The hardware is deliberately plain: one disk, no network, no audio, no USB. A
 # device ME OS does not drive is a device that can only add a way to fail.
+#
+# The disk is the one exception, added for M23. It is a file under build/ and it
+# is kept between runs on purpose, because the whole point of it is that what
+# you do in ME OS is still there the next time you start the machine. Deleting
+# the machine deletes it too.
 set -euo pipefail
 
 VM="${VM:-ME-OS}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ISO="${ISO:-$ROOT/build/me-os.iso}"
 SHOT="${SHOT:-$ROOT/build/vbox-screen.png}"
+# Kept between runs. Made once and then left alone, so what ME OS writes to it
+# is still there next time, which is the entire point of having it.
+DISK="${DISK:-$ROOT/build/me-os-vbox.vdi}"
+DISK_MB="${DISK_MB:-8}"
 WAIT="${WAIT:-25}"
 
 fail() { echo "vbox: $*" >&2; exit 1; }
@@ -74,7 +83,18 @@ build_it() {
     fi
     VBoxManage storageattach "$VM" --storagectl IDE --port 0 --device 0 \
         --type dvddrive --medium "$ISO" >/dev/null
-    echo "vbox: $VM has 512 MB, one processor, no disk, no network, and $ISO"
+
+    # The secondary channel, so the disk is not sharing a cable with the CD the
+    # machine boots from. ME OS looks at all four sockets, so either would work,
+    # and keeping them apart makes the log easier to read.
+    if [ ! -f "$DISK" ]; then
+        VBoxManage createmedium disk --filename "$DISK" \
+            --size "$DISK_MB" --format VDI >/dev/null
+        echo "vbox: made a $DISK_MB MB disk at $DISK"
+    fi
+    VBoxManage storageattach "$VM" --storagectl IDE --port 1 --device 0 \
+        --type hdd --medium "$DISK" >/dev/null
+    echo "vbox: $VM has 512 MB, one processor, a $DISK_MB MB disk, no network, and $ISO"
 }
 
 case "${1:-run}" in

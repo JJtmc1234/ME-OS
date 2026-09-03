@@ -67,6 +67,11 @@ SCREEN_FOCUS_SYSTEM = BUILD_DIR / "screen-focus-system.ppm"
 SCREEN_FOCUS_DEMO = BUILD_DIR / "screen-focus-demo.ppm"
 SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
+# The second boot, which is what proves the disk survived a restart.
+DEBUG_LOG_AGAIN = BUILD_DIR / "debug-again.log"
+# Mirrors kernel/src/main.c. The exact line, because the kernel also has a
+# "nothing loaded from the disk" that differs from it by one word.
+LOADED_LINE = "me-os: filesystem loaded from disk"
 SERIAL_LOG = BUILD_DIR / "serial.log"
 
 # These mirror kernel/src/main.c. If the kernel's wording changes, change it here.
@@ -538,6 +543,58 @@ def check_workspaces() -> list[str]:
 
     return [f"M22 workspaces: {len(switched)} switch(es), and the layout after "
             f"one holds {', '.join(sorted(final))}"]
+
+
+def check_persistence() -> list[str]:
+    """M23: the filesystem was on a disk, and a second boot read it back.
+
+    Two logs, because one boot cannot prove this. The first has to say it wrote
+    the disk. The second is a kernel that was handed nothing but the ISO and
+    that disk, so anything it knows about /PERSIST.TXT it read off it.
+    """
+    first = DEBUG_LOG.read_text(errors="ignore")
+    if not DEBUG_LOG_AGAIN.exists():
+        raise CheckFailed("the machine was never restarted, so nothing was proved")
+    again = DEBUG_LOG_AGAIN.read_text(errors="ignore")
+
+    found = [l for l in first.splitlines()
+             if l.startswith("me-os: disk ") and " sectors of " in l]
+    if not found:
+        raise CheckFailed(
+            "the first boot found no disk, so there was nothing to save to: "
+            + next((l for l in first.splitlines() if "no disk found" in l),
+                   "and it did not say why"))
+    if "me-os: FAILED to save" in first:
+        line = next(l for l in first.splitlines() if "FAILED to save" in l)
+        raise CheckFailed(f"a save failed during the first boot: {line}")
+    if "me-os: filesystem saved" not in first:
+        raise CheckFailed("the first boot never saved the filesystem")
+
+    # The first boot must have started from nothing, or the disk was left over
+    # from a previous run and this check proves only that a file exists.
+    if LOADED_LINE in first:
+        raise CheckFailed(
+            "the first boot loaded a filesystem, so the disk was not blank and "
+            "the second boot proves nothing about this run")
+
+    loaded = [l for l in again.splitlines() if l.startswith(LOADED_LINE)]
+    if not loaded:
+        raise CheckFailed(
+            "the second boot did not load the disk the first one wrote: "
+            + next((l for l in again.splitlines() if "nothing loaded" in l),
+                   "and gave no reason"))
+
+    holds = [l for l in again.splitlines() if l.startswith("me-os: disk holds")]
+    if not holds:
+        raise CheckFailed("the second boot never said what the disk holds")
+    if "PERSIST.TXT" not in holds[-1]:
+        raise CheckFailed(
+            "the file written before the restart is not on the disk after it: "
+            + holds[-1])
+
+    return [f"M23 disk: {found[-1].split('me-os: disk ')[-1]}",
+            f"M23 persistence: {loaded[-1].split('disk, ')[-1]} came back after "
+            f"a restart, holding{holds[-1].split('disk holds')[-1]}"]
 
 
 def check_tiles_on_screen(path: Path) -> list[str]:
@@ -1311,6 +1368,7 @@ def main() -> int:
         notes += check_editor()
         notes += check_clock()
         notes += check_workspaces()
+        notes += check_persistence()
         notes += check_tiles_on_screen(SCREEN_FOCUS_SYSTEM)
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -1318,13 +1376,14 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M22 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M23 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
           "two opaque window surfaces with click focus and routed input, all of it "
           "presented through dirty regions rather than whole screen repaints, "
-          "tiled into a desktop with workspaces, a shell, an editor and a clock")
+          "tiled into a desktop with workspaces, a shell, an editor and a clock, "
+          "on a filesystem that is still there after the machine restarts")
     print("A person should still watch it boot once with make run.")
     return 0
 
