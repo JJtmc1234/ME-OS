@@ -331,6 +331,10 @@ check-reproducible:
 
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.
+# The filesystem is five files now, and three test programs link all of them.
+VFS_SRCS := kernel/src/vfs.c kernel/src/vfspath.c kernel/src/vfstree.c \
+            kernel/src/vfsfile.c kernel/src/vfsmove.c kernel/src/vfsblock.c
+
 HOST_TEST_FLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wshadow -Ikernel/include
 
 $(BUILD)/fb_bounds_test: tests/fb_bounds_test.c kernel/src/fb.c kernel/src/font.c \
@@ -367,12 +371,11 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
 $(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/cmd.c \
-                    kernel/src/cmdfs.c kernel/src/vfs.c kernel/src/vfsblock.c \
-                    kernel/src/surface.c kernel/src/font.c kernel/src/region.c \
-                    $(HEADERS)
+                    kernel/src/cmdfs.c $(VFS_SRCS) kernel/src/surface.c \
+                    kernel/src/font.c kernel/src/region.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
-		kernel/src/cmd.c kernel/src/cmdfs.c kernel/src/vfs.c kernel/src/vfsblock.c \
+		kernel/src/cmd.c kernel/src/cmdfs.c $(VFS_SRCS) \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 
 # The editor on its own: insert in the middle, split a line, join two, and the
@@ -391,22 +394,20 @@ $(BUILD)/rtc_test: tests/rtc_test.c kernel/src/rtc.c $(HEADERS)
 
 # The filesystem on its own. Path resolution, the root that cannot be climbed
 # out of, and the working directory that must not be deleted from under you.
-$(BUILD)/vfs_test: tests/vfs_test.c kernel/src/vfs.c kernel/src/vfsblock.c $(HEADERS)
+$(BUILD)/vfs_test: tests/vfs_test.c $(VFS_SRCS) $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(HOST_TEST_FLAGS) tests/vfs_test.c kernel/src/vfs.c \
-		kernel/src/vfsblock.c -o $@
+	$(CC) $(HOST_TEST_FLAGS) tests/vfs_test.c $(VFS_SRCS) -o $@
 
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
 $(BUILD)/vfsdisk_test: tests/vfsdisk_test.c kernel/src/vfsdisk.c \
                        kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
-                       kernel/src/disk.c kernel/src/vfs.c kernel/src/vfsblock.c \
-                       $(HEADERS)
+                       kernel/src/disk.c $(VFS_SRCS) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/vfsdisk_test.c kernel/src/vfsdisk.c \
 		kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
-		kernel/src/disk.c kernel/src/vfs.c kernel/src/vfsblock.c -o $@
+		kernel/src/disk.c $(VFS_SRCS) -o $@
 
 $(BUILD)/cpu_test: tests/cpu_test.c kernel/src/cpu.c $(HEADERS)
 	@mkdir -p $(BUILD)
