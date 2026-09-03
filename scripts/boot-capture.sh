@@ -105,6 +105,7 @@ DEBUG_LOG_AGAIN="$BUILD_DIR/debug-again.log"
 # that out.
 DISK="$BUILD_DIR/me-os-test-disk.img"
 SHOT_RESTART="${SHOT_RESTART:-$BUILD_DIR/screen-restart.ppm}"
+SHOT_SCROLLBACK="${SHOT_SCROLLBACK:-$BUILD_DIR/screen-scrollback.ppm}"
 SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
@@ -443,6 +444,19 @@ rectangle_centre() {
     type_line "cat sorted.txt | grep txt"
     type_line "head 2 sorted.txt"
     type_line "df"
+    # M26. Fill the screen, then look back at what scrolled off it. HELP is the
+    # longest thing the shell prints, so it is what pushes lines off the top.
+    type_line "help"
+    echo "sendkey pgup"
+    sleep 1
+    echo "sendkey pgup"
+    sleep 1
+    echo "screendump $SHOT_SCROLLBACK"
+    sleep 1
+    echo "sendkey pgdn"
+    sleep 1
+    echo "sendkey pgdn"
+    sleep 1
     type_line "date"
     sleep 2
 
@@ -494,6 +508,7 @@ echo "boot-capture: restarting with the same disk to see what survived"
         -no-reboot -no-shutdown > /dev/null
 
 [ -s "$SHOT_RESTART" ] || fail "QEMU produced no screenshot at $SHOT_RESTART"
+[ -s "$SHOT_SCROLLBACK" ] || fail "QEMU produced no screenshot at $SHOT_SCROLLBACK"
 
 [ -s "$SHOT_BOOT" ] || fail "QEMU produced no screenshot at $SHOT_BOOT"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"

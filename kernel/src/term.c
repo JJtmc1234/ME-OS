@@ -1,5 +1,7 @@
 #include "term.h"
 
+#include "termback.h"
+
 #include "font.h"
 
 /* One pixel of air between rows, so descenders and the block cursor do not
@@ -93,12 +95,22 @@ void term_clear(struct term *term)
     }
     term->row = 0;
     term->column = 0;
+    /* Back to the newest line. What was kept stays kept, which is what every
+     * terminal does: CLEAR empties the screen, it does not burn the past. But
+     * leaving the view up in the scrollback of a screen that is now blank would
+     * look like the machine had stopped answering. */
+    (void)termback_to_bottom(term);
 }
 
 /* Moves every row up one and blanks the last, which is what makes the grid a
  * scrollback rather than a page that stops when it is full. */
 static void scroll(struct term *term)
 {
+    /* Kept before it is written over. This is the whole difference between
+     * scrolling, which the terminal has always done, and scrollback, which the
+     * header claimed and did not have. */
+    termback_keep(term, term->cells[0]);
+
     for (uint32_t y = 0; y + 1 < term->rows; y++) {
         for (uint32_t x = 0; x < term->cols; x++) {
             term->cells[y][x] = term->cells[y + 1][x];
@@ -187,6 +199,9 @@ bool term_key(struct term *term, char ch, bool enter, bool backspace,
     if (term == NULL) {
         return false;
     }
+    /* Typing puts you back at the bottom. Reading the past is worth doing, and
+     * typing into a screen that is not showing what you type is not. */
+    (void)termback_to_bottom(term);
 
     if (backspace) {
         if (term->input_length > 0) {
@@ -310,25 +325,65 @@ void term_draw(const struct term *term, struct surface *surface,
 
     char line[TERM_MAX_COLS + 1];
     for (uint32_t y = 0; y < term->rows && y < TERM_MAX_ROWS; y++) {
+        /* Through the view rather than out of the grid, so scrolling back shows
+         * what used to be here. At the bottom this hands back the grid itself
+         * and costs nothing. */
+        const char *cells = termback_row(term, y);
+        if (cells == NULL) {
+            continue;
+        }
         uint32_t end = term->cols;
         /* Trailing blanks are not drawn. Every one of them would be a glyph
          * lookup and a loop over eight rows of nothing. */
-        while (end > 0 && term->cells[y][end - 1] == ' ') {
+        while (end > 0 && cells[end - 1] == ' ') {
             end--;
         }
         if (end == 0) {
             continue;
         }
         for (uint32_t x = 0; x < end; x++) {
-            line[x] = term->cells[y][x];
+            line[x] = cells[x];
         }
         line[end] = '\0';
         surface_draw_string(surface, line, 0, (int64_t)(y * ROW_PITCH), text, 1);
     }
 
     char prompt[TERM_MAX_COLS + 1];
-    const uint64_t length = term_prompt_line(term, prompt, sizeof prompt);
     const int64_t prompt_y = (int64_t)(term->rows * ROW_PITCH);
+
+    /* Looking at the past, the prompt line says so instead.
+     *
+     * A terminal showing old output with a live prompt under it looks like a
+     * machine that has stopped answering. Saying how far back the view is, and
+     * that a key brings it back, is the difference between a feature and a
+     * fault somebody reports. */
+    if (termback_offset(term) > 0) {
+        char note[TERM_MAX_COLS + 1];
+        uint64_t at = 0;
+        const char *say = "-- ";
+        while (*say != '\0' && at + 1 < sizeof note) {
+            note[at++] = *say++;
+        }
+        uint32_t lines = termback_offset(term);
+        char digits[12];
+        uint64_t d = 0;
+        do {
+            digits[d++] = (char)('0' + lines % 10);
+            lines /= 10;
+        } while (lines > 0 && d < sizeof digits);
+        while (d > 0 && at + 1 < sizeof note) {
+            note[at++] = digits[--d];
+        }
+        say = " LINES BACK, PAGE DOWN TO RETURN --";
+        while (*say != '\0' && at + 1 < sizeof note) {
+            note[at++] = *say++;
+        }
+        note[at] = '\0';
+        surface_draw_string(surface, note, 0, prompt_y, accent, 1);
+        return;
+    }
+
+    const uint64_t length = term_prompt_line(term, prompt, sizeof prompt);
     surface_draw_string(surface, prompt, 0, prompt_y, accent, 1);
     /* A block after the text, so it is clear the machine is waiting for more
      * rather than having stopped. */

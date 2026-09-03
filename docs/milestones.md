@@ -701,6 +701,50 @@ the dispatcher and its pipeline, files, text filters, and somewhere to write.
 `cmd.c` had reached six hundred lines, which is the same thing that happened to
 `vfs.c` and has the same answer.
 
+## M26 scrollback, which the header had been claiming since M19
+
+Done. Page Up and Page Down look back at what went past, two hundred lines of
+it.
+
+**The header said the terminal had scrollback and it did not.** What it had was
+scrolling, which is close to the opposite: a line reaching the top was written
+over and gone. The comment even explained that the grid scrolls "which is what
+scrollback is", and that is not what scrollback is. Run TREE on anything with a
+few directories in it and the start of the answer could not be got back. HELP
+was longer than the tile it printed into.
+
+**A ring, not a list.** It fills up and keeps going, dropping the oldest line to
+make room, which is what makes the buffer a size rather than a limit somebody
+meets and has to think about.
+
+**At the bottom it costs nothing.** `termback_row` hands back the grid itself
+when the view has not moved, which is where a terminal spends nearly all of its
+life. Nothing pays for scrollback until somebody uses it.
+
+**A page is a screen less one line.** The line you were reading at the edge is
+still on screen after the jump. A whole page leaves nothing in common between
+the two views and makes it easy to lose your place.
+
+**Output arriving while you are reading does not drag you along.** The view
+holds the same text rather than the same line number, so a line arriving at the
+bottom does not pull what you are reading upwards. Taking that out fails a
+check, which is how it is known to be tested rather than merely written.
+
+**The prompt says where you are.** A terminal showing old output with a live
+prompt under it looks like a machine that has stopped answering, so while the
+view is back the prompt line says how far and which key returns.
+
+**Typing puts you back at the bottom**, because reading the past is worth doing
+and typing into a screen that is not showing what you type is not. Clearing the
+screen returns the view too, but keeps what was kept: CLEAR empties the screen,
+it does not burn the past.
+
+**The keys had to be decoded first.** Page Up and Page Down were in the part of
+the extended scancode set the keyboard dropped, so a scrollback nothing could
+reach would have been the same as no scrollback. They are named keys rather than
+characters, so they can never land in a sum or a filename, and the boot test
+presses the real keys and reads the kernel's own report of where the view went.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -712,7 +756,7 @@ the dispatcher and its pipeline, files, text filters, and somewhere to write.
 
 ## Verification status
 
-M1 to M25 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M26 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

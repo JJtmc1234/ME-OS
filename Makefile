@@ -376,11 +376,12 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # The terminal, its line editor and every command it answers. No framebuffer
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
-$(BUILD)/term_test: tests/term_test.c kernel/src/term.c \
+$(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/termback.c \
                     $(CMD_SRCS) $(VFS_SRCS) kernel/src/surface.c \
                     kernel/src/font.c kernel/src/region.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
+		kernel/src/termback.c \
 		$(CMD_SRCS) $(VFS_SRCS) \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 

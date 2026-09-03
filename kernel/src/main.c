@@ -51,6 +51,7 @@
 #include "region.h"
 #include "surface.h"
 #include "term.h"
+#include "termback.h"
 #include "timer.h"
 #include "vars.h"
 #include "window.h"
@@ -661,6 +662,8 @@ static enum window_key_code window_key_code_for(const struct kbd_key *key)
     if (same_name(key->name, "ESCAPE")) return WINDOW_KEY_ESCAPE;
     if (same_name(key->name, "BACKSPACE")) return WINDOW_KEY_BACKSPACE;
     if (same_name(key->name, "TAB")) return WINDOW_KEY_TAB;
+    if (same_name(key->name, "PAGEUP")) return WINDOW_KEY_PAGE_UP;
+    if (same_name(key->name, "PAGEDOWN")) return WINDOW_KEY_PAGE_DOWN;
     if (same_name(key->name, "UP")) return WINDOW_KEY_UP;
     if (same_name(key->name, "DOWN")) return WINDOW_KEY_DOWN;
     if (same_name(key->name, "LEFT")) return WINDOW_KEY_LEFT;
@@ -675,6 +678,8 @@ static const char *window_key_name(enum window_key_code code)
     case WINDOW_KEY_ESCAPE: return "ESCAPE";
     case WINDOW_KEY_BACKSPACE: return "BACKSPACE";
     case WINDOW_KEY_TAB: return "TAB";
+    case WINDOW_KEY_PAGE_UP: return "PAGEUP";
+    case WINDOW_KEY_PAGE_DOWN: return "PAGEDOWN";
     case WINDOW_KEY_UP: return "UP";
     case WINDOW_KEY_DOWN: return "DOWN";
     case WINDOW_KEY_LEFT: return "LEFT";
@@ -851,6 +856,21 @@ static void terminal_key(const struct window_event *event)
 
     /* Up and down walk what was typed before, which is the one thing a shell
      * without it is most obviously missing. */
+    /* Scrollback first, because these keys mean nothing else here and a person
+     * looking at the past should not also be typing into the line editor. */
+    if (event->data.key.code == WINDOW_KEY_PAGE_UP ||
+        event->data.key.code == WINDOW_KEY_PAGE_DOWN) {
+        const bool back = event->data.key.code == WINDOW_KEY_PAGE_UP;
+        if (termback_scroll(&terminal, back ? 1 : -1)) {
+            log_str("me-os: terminal scrolled to ");
+            log_dec(termback_offset(&terminal));
+            log_str(" lines back of ");
+            log_dec(termback_held(&terminal));
+            log_str("\n");
+            terminal_paint();
+        }
+        return;
+    }
     if (event->data.key.code == WINDOW_KEY_UP ||
         event->data.key.code == WINDOW_KEY_DOWN) {
         if (term_history_step(&terminal, event->data.key.code == WINDOW_KEY_UP)) {

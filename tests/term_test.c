@@ -10,6 +10,7 @@
 
 #include "cmd.h"
 #include "term.h"
+#include "termback.h"
 #include "vfs.h"
 
 static int failures;
@@ -553,6 +554,118 @@ static void test_pipes_and_general_redirection(void)
     check(!cmd_split_pipe("LS", first, sizeof first, &rest), "a line with no bar");
 }
 
+/* M26. The header claimed scrollback for six milestones and the terminal did
+ * not have it: a line reaching the top was written over and gone. */
+static void test_scrollback(void)
+{
+    struct term term;
+    char row[TERM_MAX_COLS + 1];
+
+    printf("a line that scrolls off the top is kept, not lost\n");
+    term_init(&term, 20, 3);
+    term_println(&term, "ONE");
+    term_println(&term, "TWO");
+    term_println(&term, "THREE");
+    term_println(&term, "FOUR");
+    check(strcmp(row_of(&term, 0, row), "TWO") == 0, "the grid scrolled");
+    check(termback_held(&term) == 1, "and the line it lost was kept");
+    check(termback_offset(&term) == 0, "with the view still at the bottom");
+
+    printf("nothing is drawn differently until somebody scrolls\n");
+    check(termback_row(&term, 0) == term.cells[0],
+          "at the bottom the view is the grid itself");
+
+    printf("scrolling back shows what used to be there\n");
+    check(termback_scroll(&term, 1), "the view moved");
+    /* A page here is two lines, and only one has been kept, so it stops at the
+     * oldest rather than showing a line that was never there. */
+    check(termback_offset(&term) == 1, "as far back as there is anything to see");
+    check(strncmp(termback_row(&term, 0), "ONE", 3) == 0,
+          "and the oldest line is back on screen");
+    check(strncmp(termback_row(&term, 1), "TWO", 3) == 0, "with the rest under it");
+
+    printf("and coming back down returns to the newest\n");
+    check(termback_scroll(&term, -1), "the view moved");
+    check(termback_offset(&term) == 0, "all the way to the bottom");
+    check(strcmp(row_of(&term, 2, row), "FOUR") == 0, "showing the newest line");
+
+    printf("going further back than there is stops at the oldest\n");
+    check(termback_scroll(&term, 50), "it moves as far as it can");
+    check(termback_offset(&term) == termback_held(&term), "which is the oldest kept");
+    check(!termback_scroll(&term, 50), "and asking again changes nothing");
+    check(!termback_scroll(&term, 0), "nor does asking for no pages");
+    check(!termback_scroll(NULL, 1), "and no terminal scrolls nowhere");
+
+    printf("coming down from the top does not go past the bottom\n");
+    check(termback_scroll(&term, -50), "it moves");
+    check(termback_offset(&term) == 0, "to the bottom and no further");
+
+    printf("output arriving while looking back does not drag the view along\n");
+    term_init(&term, 20, 3);
+    for (int i = 0; i < 10; i++) {
+        char text[8];
+        snprintf(text, sizeof text, "L%d", i);
+        term_println(&term, text);
+    }
+    check(termback_scroll(&term, 1), "look back a page");
+    const char *reading = termback_row(&term, 0);
+    char was[TERM_MAX_COLS + 1];
+    memcpy(was, reading, TERM_MAX_COLS);
+    was[TERM_MAX_COLS] = '\0';
+
+    term_println(&term, "NEW");
+    check(strncmp(termback_row(&term, 0), was, 3) == 0,
+          "the line being read is still where it was");
+
+    printf("typing puts you back at the bottom\n");
+    check(termback_offset(&term) > 0, "still looking back");
+    term_key(&term, 'A', false, false, NULL, 0);
+    check(termback_offset(&term) == 0, "a keypress returns to the newest");
+
+    printf("clearing the screen keeps what was kept but returns the view\n");
+    check(termback_scroll(&term, 1), "look back again");
+    const uint32_t kept = termback_held(&term);
+    term_clear(&term);
+    check(termback_offset(&term) == 0, "the view is back at the bottom");
+    check(termback_held(&term) == kept, "and the past was not burned");
+
+    printf("the ring keeps going once it is full, dropping the oldest\n");
+    term_init(&term, 20, 2);
+    for (int i = 0; i < TERM_BACK + 50; i++) {
+        char text[16];
+        snprintf(text, sizeof text, "N%d", i);
+        term_println(&term, text);
+    }
+    check(termback_held(&term) == TERM_BACK, "it holds its limit and no more");
+    check(termback_scroll(&term, 10000), "look as far back as it goes");
+    /* The oldest line still held is the newest minus what the ring holds, not
+     * line zero. A ring that wrote over the wrong end would show N0 here. */
+    const char *oldest = termback_row(&term, 0);
+    check(oldest != NULL, "there is a line there");
+    check(strncmp(oldest, "N0 ", 3) != 0, "and it is not the very first one");
+
+    printf("a page is a screen less one line, so you keep your place\n");
+    term_init(&term, 20, 10);
+    for (int i = 0; i < 60; i++) {
+        char text[16];
+        snprintf(text, sizeof text, "P%d", i);
+        term_println(&term, text);
+    }
+    check(termback_held(&term) > 30, "plenty is kept");
+    check(termback_scroll(&term, 1), "one page back");
+    check(termback_offset(&term) == 9, "moves nine lines on a ten line screen");
+    check(termback_scroll(&term, 1), "another page");
+    check(termback_offset(&term) == 18, "and another nine");
+    /* The overlap is the point. The line at the top of one view has to still be
+     * on the next, or there is no way to read continuously. */
+    check(termback_scroll(&term, -1), "back down one page");
+    check(termback_offset(&term) == 9, "lands exactly where it was");
+
+    printf("a row past the end of the view is nothing rather than nonsense\n");
+    check(termback_row(&term, term.rows) == NULL, "off the bottom of the grid");
+    check(termback_row(NULL, 0) == NULL, "and no terminal has no rows");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -564,6 +677,7 @@ int main(void)
     test_redirection_is_split_correctly();
     test_the_file_commands();
     test_pipes_and_general_redirection();
+    test_scrollback();
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

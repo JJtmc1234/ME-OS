@@ -134,6 +134,10 @@ bool kbd_translate_extended(uint8_t code, struct kbd_key *out)
     case 0x50: name = "DOWN";  break;
     case 0x4B: name = "LEFT";  break;
     case 0x4D: name = "RIGHT"; break;
+    /* Added in M26, when the terminal got somewhere to scroll back to. A
+     * scrollback nothing can reach is the same as no scrollback. */
+    case 0x49: name = "PAGEUP";   break;
+    case 0x51: name = "PAGEDOWN"; break;
     default:   return false;
     }
 

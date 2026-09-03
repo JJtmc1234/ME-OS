@@ -31,6 +31,10 @@ enum window_key_code {
     WINDOW_KEY_DOWN,
     WINDOW_KEY_LEFT,
     WINDOW_KEY_RIGHT,
+    /* Added in M26 for the terminal's scrollback. Named keys rather than
+     * characters, so they can never land in a sum or in a filename. */
+    WINDOW_KEY_PAGE_UP,
+    WINDOW_KEY_PAGE_DOWN,
 };
 
 struct window_event {

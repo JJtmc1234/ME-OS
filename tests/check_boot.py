@@ -624,6 +624,37 @@ def check_persistence() -> list[str]:
             f"a restart, holding{holds[-1].split('disk holds')[-1]}"]
 
 
+def check_scrollback() -> list[str]:
+    """M26: the terminal really scrolled back, and really came down again.
+
+    Checked from the kernel's own report of where the view is. A screenshot
+    would show text either way, and the question is whether it is older text.
+    """
+    text = DEBUG_LOG.read_text(errors="ignore")
+    moved = [l for l in text.splitlines() if "terminal scrolled to " in l]
+    if not moved:
+        raise CheckFailed(
+            "the terminal never scrolled, so either the page keys are not "
+            "decoded or nothing was kept to scroll back to")
+
+    def lines_back(line: str) -> int:
+        return int(line.split("scrolled to ")[-1].split()[0])
+
+    depths = [lines_back(l) for l in moved]
+    if max(depths) == 0:
+        raise CheckFailed(f"the view never left the newest line: {moved}")
+    if depths[-1] != 0:
+        raise CheckFailed(
+            f"the view never came back down, so page down does not work: {moved[-1]}")
+    held = int(moved[0].split(" lines back of ")[-1])
+    if held < max(depths):
+        raise CheckFailed(
+            f"it scrolled back {max(depths)} lines but only {held} were kept")
+
+    return [f"M26 scrollback: went {max(depths)} lines back of {held} kept, "
+            f"and came down to the newest again"]
+
+
 def check_tiles_on_screen(path: Path) -> list[str]:
     """The tiles really are on the screen where the kernel said it put them.
 
@@ -1398,6 +1429,7 @@ def main() -> int:
         notes += check_clock()
         notes += check_workspaces()
         notes += check_persistence()
+        notes += check_scrollback()
         notes += check_tiles_on_screen(SCREEN_FOCUS_SYSTEM)
     except CheckFailed as exc:
         print(f"check FAILED: {exc}")
@@ -1405,7 +1437,7 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M25 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M26 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
@@ -1414,7 +1446,8 @@ def main() -> int:
           "tiled into a desktop with workspaces, a shell, an editor and a clock, "
           "on a filesystem of files made of blocks that is still there after "
           "the machine restarts, with a shell whose commands can be piped "
-          "into each other and written to files")
+          "into each other and written to files, and a scrollback you can "
+          "look at what went past in")
     print("A person should still watch it boot once with make run.")
     return 0
 

@@ -1,4 +1,4 @@
-/* A character grid with scrollback and a line editor.
+/* A character grid, the lines that have scrolled off it, and a line editor.
  *
  * The thing that makes a machine feel like a computer rather than a picture of
  * one is being able to type at it and have it answer. This is the half that
@@ -28,13 +28,19 @@
 /* How many lines back the arrows reach. Enough to get at what you just did
  * wrong, which is what history is actually for. */
 #define TERM_HISTORY 12
+/* How many scrolled off lines are kept, which is a different thing from the
+ * command history above: this is what the machine said, that is what you typed.
+ * Two hundred is a few screens, which is as far back as anybody looks for
+ * something they can simply run again. */
+#define TERM_BACK 200
 
 struct term {
     char cells[TERM_MAX_ROWS][TERM_MAX_COLS];
     uint32_t cols;
     uint32_t rows;
     /* The row the next output line goes on. Once it reaches the bottom the grid
-     * scrolls rather than the row growing, which is what scrollback is. */
+     * scrolls rather than the row growing, and the line that leaves the top is
+     * kept in `back` rather than written over. */
     uint32_t row;
     uint32_t column;
     /* The line being typed. Kept apart from the grid so that editing it does
@@ -52,6 +58,20 @@ struct term {
     char history[TERM_HISTORY][TERM_INPUT_MAX];
     uint32_t history_count;
     uint32_t history_at;
+
+    /* The lines that have scrolled off the top, oldest first, as a ring. Full,
+     * it keeps going and drops the oldest, which is what makes the buffer a
+     * size rather than a limit somebody meets.
+     *
+     * `back_count` stops at TERM_BACK. `back_next` is where the next one goes,
+     * and once the ring has wrapped it is also where the oldest one is. */
+    char back[TERM_BACK][TERM_MAX_COLS];
+    uint32_t back_count;
+    uint32_t back_next;
+    /* How many lines above the newest the view is. Zero is the bottom, which is
+     * where a terminal spends nearly all its life, and where nothing about
+     * scrollback costs anything. */
+    uint32_t back_view;
 };
 
 /* `cols` and `rows` are clamped to what the grid can hold and to at least one
