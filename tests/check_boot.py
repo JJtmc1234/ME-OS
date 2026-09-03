@@ -1029,6 +1029,9 @@ def check_log() -> list[str]:
         "editor opened TODO.TXT",
         "editor saved TODO.TXT",
         "terminal ran LS | SORT > SORTED.TXT",
+        # M28. The line was typed as CAT COM and Tab finished it. If
+        # completion had done nothing this would read CAT COM.
+        "terminal ran CAT COMPLETED.TXT",
         "terminal ran RUN SETUP.TXT",
         "terminal ran CAT SORTED.TXT | GREP TXT",
         "window moved to workspace ",
@@ -1487,7 +1490,7 @@ def main() -> int:
 
     for note in notes:
         print(f"  {note}")
-    print("M1 to M27 checks passed: message, key press, a rectangle that drifts, "
+    print("M1 to M28 checks passed: message, key press, a rectangle that drifts, "
           "can be steered, wraps and is dragged, a cursor that follows the mouse, sums "
           "answered, a conditional taking each branch in turn, a value remembered "
           "under a name and used again, a triangle turning about its own centre, and "
@@ -1497,7 +1500,8 @@ def main() -> int:
           "on a filesystem of files made of blocks that is still there after "
           "the machine restarts, with a shell whose commands can be piped "
           "into each other and written to files, and a scrollback you can "
-          "look at what went past in, running files of commands you wrote")
+          "look at what went past in, running files of commands you wrote, and "
+          "finishing names you have started typing")
     print("A person should still watch it boot once with make run.")
     return 0
 

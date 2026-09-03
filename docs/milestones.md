@@ -848,6 +848,53 @@ the boot test cannot look for it in the log. What proves RUN ran is what it left
 behind: the script makes a directory at the root, and the machine reports it in
 the listing it prints after the restart. Evidence rather than an announcement.
 
+## M28 finishing a name you have started typing
+
+Done. Tab completes a filename against the filesystem.
+
+The shell has directories, paths and files called things like README.TXT, and
+until now the only way to reach one was to type all of it correctly. On a
+machine whose keyboard is a virtual one inside an emulator, that is not a small
+thing.
+
+**The three rules are the ones every shell settled on, and each is a decision.**
+One match is finished off, with a slash after it when it is a directory, because
+whatever comes next is almost certainly inside it. Several are finished as far
+as they all agree and no further, which is the most that can be said without
+guessing. Nothing matching leaves the line exactly as it was.
+
+**That last one matters most.** A completion that changed the line when it had
+nothing to offer would be worse than one that did nothing, because the line
+would then be wrong in a way that looks like something you typed. Taking that
+guard out fails a check.
+
+**Finishing one name and finishing several are the same code.** The longest
+beginning every match agrees on is built up as the matches are found, and with
+one match that beginning is the whole name. Writing them as two cases would have
+been two things to keep in step.
+
+**The candidates are shown on the first press, not the second.** One key doing
+the whole job is one fewer thing to know, and the list is what tells you which
+letter to type next.
+
+**Case does not matter.** Everything this machine draws is upper case, and a
+completion that cared would find nothing most of the time.
+
+**Where to look and what to match is worked out once.** Finishing a name and
+listing the candidates both need the same three answers, and two copies would be
+two chances for them to disagree about which directory they meant.
+
+**The terminal still knows nothing about files.** Tab is handled where the
+filesystem is, and the line editor gained one function that replaces the line it
+is holding. A terminal that knew about filenames could not be tested without a
+filesystem underneath it, which is the same reason the commands were split out
+of it in M19.
+
+**The boot test presses a real Tab.** It types `CAT COM`, presses the key, and
+runs whatever came out. The kernel logs the command it ran, so if completion had
+done nothing the log would say `CAT COM` and the check would fail. It says
+`CAT COMPLETED.TXT`.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -859,7 +906,7 @@ the listing it prints after the restart. Evidence rather than an announcement.
 
 ## Verification status
 
-M1 to M27 are verified in QEMU by automated framebuffer inspection. None has
+M1 to M28 are verified in QEMU by automated framebuffer inspection. None has
 been observed on physical ME hardware, and physical machine boot testing is a
 later step that has not been scheduled.
 

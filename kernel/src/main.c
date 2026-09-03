@@ -856,6 +856,37 @@ static void terminal_key(const struct window_event *event)
 
     /* Up and down walk what was typed before, which is the one thing a shell
      * without it is most obviously missing. */
+    /* Tab finishes a name rather than typing one.
+     *
+     * Handled here rather than in the line editor, because finishing a name
+     * means reading the filesystem, and a terminal that knew about files could
+     * not be tested without one. */
+    if (event->data.key.code == WINDOW_KEY_TAB) {
+        char finished[TERM_INPUT_MAX];
+        struct cmd_out out;
+        cmd_out_to_term(&out, &terminal);
+        struct cmd_context completing = {
+            .out = &out, .term = &terminal, .fs = &filesystem };
+
+        const uint64_t matches =
+            cmd_complete(&completing, terminal.input, finished, sizeof finished);
+        if (matches == 0) {
+            return;   /* nothing to offer, so the line is left as it was */
+        }
+        if (matches > 1) {
+            /* Shown now rather than on a second press. One key doing the whole
+             * job is one fewer thing to know, and the list is what tells you
+             * which letter to type next. */
+            char prompt[TERM_MAX_COLS + 1];
+            term_prompt_line(&terminal, prompt, sizeof prompt);
+            term_println(&terminal, prompt);
+            cmdtab_show(&completing, terminal.input);
+        }
+        (void)term_set_input(&terminal, finished);
+        terminal_paint();
+        return;
+    }
+
     /* Scrollback first, because these keys mean nothing else here and a person
      * looking at the past should not also be typing into the line editor. */
     if (event->data.key.code == WINDOW_KEY_PAGE_UP ||

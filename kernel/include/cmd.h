@@ -120,6 +120,24 @@ void cmdtext_tail(struct cmd_context *context, const char *rest);
  * print any of them. */
 void cmdsort_run(struct cmd_context *context, const char *path);
 
+/* Finishes the name at the end of `line` against the filesystem.
+ *
+ * Returns how many entries could have been meant. Zero leaves `out` empty and
+ * the caller leaves the line alone: a completion that changed the line when it
+ * had nothing to offer would be worse than one that did nothing, because the
+ * line would then be wrong in a way that looks like something you typed.
+ *
+ * One match writes the whole line with the name finished, and a slash after it
+ * when it is a directory. Several write it finished as far as they all agree,
+ * which is the most that can be said without guessing. */
+uint64_t cmd_complete(struct cmd_context *context, const char *line,
+                      char *out, uint64_t capacity);
+
+/* Prints every name the line could have meant, for when there is more than one.
+ * Separate from the completing, because showing them is the caller's decision
+ * and completing is not. */
+void cmdtab_show(struct cmd_context *context, const char *line);
+
 /* Runs a file of commands, one line at a time. Blank lines and lines starting
  * with `#` are skipped. It calls `cmd_run`, which calls this again for a script
  * that runs another, and CMD_MAX_DEPTH is what stops one that runs itself. */

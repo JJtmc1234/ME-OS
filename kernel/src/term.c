@@ -259,6 +259,30 @@ bool term_key(struct term *term, char ch, bool enter, bool backspace,
     return false;
 }
 
+bool term_set_input(struct term *term, const char *text)
+{
+    if (term == NULL || text == NULL) {
+        return false;
+    }
+    uint32_t length = 0;
+    while (text[length] != '\0') {
+        length++;
+    }
+    /* Refused rather than cut. A completion that silently dropped its last
+     * characters would put a name on the line that is not the name of anything,
+     * and it would look like the completion had simply guessed wrong. */
+    if (length + 1 >= TERM_INPUT_MAX) {
+        return false;
+    }
+    for (uint32_t i = 0; i < length; i++) {
+        term->input[i] = text[i];
+    }
+    term->input[length] = '\0';
+    term->input_length = length;
+    (void)termback_to_bottom(term);
+    return true;
+}
+
 bool term_history_step(struct term *term, bool back)
 {
     if (term == NULL || term->history_count == 0) {

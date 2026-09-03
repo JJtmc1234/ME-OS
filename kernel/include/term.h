@@ -108,6 +108,11 @@ bool term_key(struct term *term, char ch, bool enter, bool backspace,
  * knows whether anything needs redrawing. */
 bool term_history_step(struct term *term, bool back);
 
+/* Replaces the line being typed. What completion needs: it works out the whole
+ * line and hands it back, rather than the terminal knowing anything about
+ * filenames. Refused, leaving the line alone, when the new one will not fit. */
+bool term_set_input(struct term *term, const char *text);
+
 /* The prompt and what has been typed so far, as one string, so the drawing and
  * any test agree about what the bottom line says. */
 uint64_t term_prompt_line(const struct term *term, char *out, uint64_t capacity);

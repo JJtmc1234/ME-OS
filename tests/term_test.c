@@ -781,6 +781,97 @@ static void test_running_a_file_of_commands(void)
           "an ordinary command runs");
 }
 
+/* M28. Finishing a name, and the one rule that matters most: with nothing to
+ * offer it changes nothing at all. */
+static void test_finishing_a_name(void)
+{
+    struct term term;
+    struct vfs fs;
+    char row[TERM_MAX_COLS + 1];
+    char line[TERM_INPUT_MAX];
+    term_init(&term, 60, 24);
+    vfs_init(&fs);
+    struct cmd_out output;
+    cmd_out_to_term(&output, &term);
+    struct cmd_context context = {
+        .out = &output, .term = &term, .fs = &fs, .version = "0.28" };
+
+    check(vfs_mkdir(&fs, "/PROJECTS") == VFS_OK, "a directory");
+    check(vfs_write(&fs, "/README.TXT", "X") == VFS_OK, "a file");
+    check(vfs_write(&fs, "/RECIPE.TXT", "X") == VFS_OK, "and another like it");
+    check(vfs_write(&fs, "/PROJECTS/PLAN.TXT", "X") == VFS_OK, "one further down");
+
+    printf("one match is finished off\n");
+    check(cmd_complete(&context, "CAT READ", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "CAT README.TXT") == 0, "and the whole name is on the line");
+
+    printf("a directory gets a slash, because what comes next is inside it\n");
+    check(cmd_complete(&context, "CD PROJ", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "CD PROJECTS/") == 0, "with the slash already typed");
+
+    printf("several are finished as far as they agree and no further\n");
+    check(cmd_complete(&context, "CAT RE", line, sizeof line) == 2, "two match");
+    check(strcmp(line, "CAT RE") == 0, "RE is already all they agree on");
+    check(cmd_complete(&context, "CAT R", line, sizeof line) == 2, "still two");
+    check(strcmp(line, "CAT RE") == 0, "so it adds the E and stops");
+
+    printf("nothing matching leaves the line exactly as it was\n");
+    line[0] = 'Z';
+    line[1] = '\0';
+    check(cmd_complete(&context, "CAT ZZZ", line, sizeof line) == 0, "no matches");
+    check(line[0] == '\0', "and nothing was written for the caller to use");
+
+    printf("a name inside a directory is finished in that directory\n");
+    check(cmd_complete(&context, "CAT PROJECTS/PL", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "CAT PROJECTS/PLAN.TXT") == 0, "with the path kept");
+
+    printf("and from the root, which is a slash and not an empty name\n");
+    check(cmd_complete(&context, "CAT /READ", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "CAT /README.TXT") == 0, "rooted at the top");
+
+    printf("a directory that is not there completes nothing\n");
+    check(cmd_complete(&context, "CAT NOWHERE/A", line, sizeof line) == 0, "refused");
+
+    printf("completing the command itself looks in the working directory\n");
+    check(cmd_complete(&context, "READ", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "README.TXT") == 0, "so a file can be named first");
+
+    printf("an empty partial name offers everything there\n");
+    check(cmd_complete(&context, "CAT ", line, sizeof line) == 3,
+          "three things in the root");
+
+    printf("it is not fussy about upper and lower case\n");
+    check(cmd_complete(&context, "CAT read", line, sizeof line) == 1, "one match");
+    check(strcmp(line, "CAT README.TXT") == 0, "finished in the case on disk");
+
+    printf("and the candidates can be shown\n");
+    term_clear(&term);
+    cmdtab_show(&context, "CAT RE");
+    check(strcmp(row_of(&term, 0, row), "README.TXT") == 0, "the first");
+    check(strcmp(row_of(&term, 1, row), "RECIPE.TXT") == 0, "and the second");
+    term_clear(&term);
+    cmdtab_show(&context, "CD PROJ");
+    check(strcmp(row_of(&term, 0, row), "PROJECTS/") == 0,
+          "a directory is shown with its slash");
+
+    printf("the line editor takes a finished line, and refuses one too long\n");
+    check(term_set_input(&term, "CAT README.TXT"), "a line that fits");
+    check(term.input_length == 14, "is held whole");
+    char huge[TERM_INPUT_MAX + 40];
+    for (uint64_t i = 0; i < sizeof huge - 1; i++) {
+        huge[i] = 'X';
+    }
+    huge[sizeof huge - 1] = '\0';
+    check(!term_set_input(&term, huge), "one that does not is refused");
+    check(term.input_length == 14, "leaving the line alone rather than cutting it");
+
+    printf("and nonsense is refused rather than followed\n");
+    check(cmd_complete(NULL, "CAT R", line, sizeof line) == 0, "no context");
+    check(cmd_complete(&context, NULL, line, sizeof line) == 0, "no line");
+    check(cmd_complete(&context, "CAT R", NULL, 10) == 0, "nowhere to write");
+    check(cmd_complete(&context, "CAT R", line, 0) == 0, "no room to write");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -794,6 +885,7 @@ int main(void)
     test_pipes_and_general_redirection();
     test_scrollback();
     test_running_a_file_of_commands();
+    test_finishing_a_name();
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

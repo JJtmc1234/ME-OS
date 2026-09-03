@@ -471,6 +471,29 @@ rectangle_centre() {
     # longest thing the shell prints, so it is what pushes lines off the top.
     # M27. Write a script from the shell, then run it. Nothing about it is
     # special cased: RUN reads the same lines a person would type.
+    # M28. Type part of a name, press Tab, and run what it finished. If the
+    # completion did nothing the command would be CAT SET and the log would say
+    # so, which is what makes this a test rather than a demonstration.
+    type_line "write completed.txt tab finished this"
+    echo "sendkey c"
+    sleep 0.07
+    echo "sendkey a"
+    sleep 0.07
+    echo "sendkey t"
+    sleep 0.07
+    echo "sendkey spc"
+    sleep 0.07
+    echo "sendkey c"
+    sleep 0.07
+    echo "sendkey o"
+    sleep 0.07
+    echo "sendkey m"
+    sleep 0.3
+    echo "sendkey tab"
+    sleep 1
+    echo "sendkey ret"
+    sleep 1
+
     type_line "write setup.txt mkdir /made-by-script"
     type_line "run setup.txt"
     type_line "ls"
