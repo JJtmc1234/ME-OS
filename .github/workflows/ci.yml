@@ -1,0 +1,57 @@
+# What can be checked without a machine to boot on.
+#
+# ME OS is an operating system, so most of what proves it works is a person or an
+# emulator watching it start. That part stays local and this file says so rather
+# than pretending otherwise. What runs here is everything that does not need a
+# screen: the host test suites, a clean build of the real image, and the check
+# that two builds of it come out identical.
+#
+# Deliberately not run here:
+#
+#   make test   boots the image in QEMU, drives it with fake key presses and
+#               mouse packets, and reads twenty framebuffer captures. It takes
+#               four minutes, and its timing assumptions are written against
+#               this machine. A flaky check that fails for reasons nobody can
+#               reproduce teaches people to ignore the red mark, which costs
+#               more than the check is worth.
+#
+# Nothing here touches a device, writes an image to a disk, or boots anything.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Host tests and a clean build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # xorriso builds the ISO, git fetches Limine, python3 runs the checks that
+      # read captures. No QEMU and no OVMF, because nothing here boots.
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential xorriso git python3
+
+      # The twenty host suites. No emulator: they check framebuffer clipping,
+      # scancode translation, the tiling arithmetic, the filesystem, the on disk
+      # format and the shell, all on this runner.
+      - name: Host test suites
+        run: make test-unit
+
+      # A build failure is a CI failure, which is the point of this job. The
+      # kernel is built with warnings as errors and floating point confined to
+      # one file, and both are checked as part of getting here.
+      - name: Build the bootable image
+        run: make iso
+
+      # Two builds of the same source have to produce the same bytes. It caught
+      # a random GPT identifier once, which would have made every release differ
+      # from the last for no reason anybody could see.
+      - name: The image is reproducible
+        run: make check-reproducible

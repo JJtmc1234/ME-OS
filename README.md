@@ -62,6 +62,21 @@ make test-unit  # the host side checks, no emulator needed
 make check-reproducible   # build it twice and compare the two files
 ```
 
+## What CI checks, and what it does not
+
+Every push and pull request runs the host suites, a clean build of the image, and
+the reproducibility check. A build failure or a failing suite fails CI.
+
+`make test` is not run there. It boots the image in QEMU, drives it with injected
+key presses and mouse packets, and reads twenty framebuffer captures, and its
+timing is written against a real machine rather than a shared runner. A check
+that goes red for reasons nobody can reproduce teaches people to ignore the red
+mark, which costs more than the check is worth. So booting stays local, and
+`docs/milestones.md` remains the place that records what a person has actually
+watched happen.
+
+Nothing in CI touches a device, writes an image to a disk, or boots anything.
+
 The image is reproducible. Two clean builds of the same source produce the same
 file, byte for byte, checked by `make check-reproducible`. Everything that would
 otherwise vary is pinned: the timestamps, the GPT identifier, the MBR disk
