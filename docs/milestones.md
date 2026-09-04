@@ -32,8 +32,19 @@ Nothing here has been booted on a physical machine yet.
 | M13 | Window object model | Stable window IDs, geometry, lifetime and deterministic z-order in a bounded pool | Verified software milestone |
 | M14 | Window surfaces and compositor | Window-local pixels are clipped and composited in z-order | Verified software milestone |
 | M15 | Focus and event queues | Focused input is routed as bounded per-window events | Verified software milestone |
-| M16 | Window chrome and dragging | Title bars, close controls and moving whole windows | Next |
-| M17 | Window resizing | Bounded live resizing with explicit surface semantics | Planned |
+| M16 | Dirty regions and an immediate cursor | Only what changed is composed and presented, and a cursor move costs a few hundred pixels rather than a screen | Verified software milestone |
+| M17 | Tiling layout | Windows are placed by a rule into tiles that never overlap and never reach into a bar | Verified software milestone |
+| M18 | The ME OS Default desktop | Bars, frames, focus and a taskbar, with click to focus routed to the right window | Verified software milestone |
+| M19 | A terminal, and a machine that knows what it is | A shell that answers with what the kernel actually measured, never a written down answer | Verified software milestone |
+| M20 | A filesystem, and the commands that move around it | Real directories, files and paths in memory, with real errors when a path is wrong | Verified software milestone |
+| M21 | An editor, a clock, and a shell you can work in | Text can be changed in the middle of a line and saved, and the machine knows the time | Verified software milestone |
+| M22 | Four workspaces | Ctrl 1 to 4 switch and Ctrl M sends a window across, and a window off screen draws nothing | Verified software milestone |
+| M23 | A disk | The filesystem is written to an ATA disk and read back, and survives a restart | Verified software milestone |
+| M24 | Files made of blocks | A file is a list of blocks from a shared pool, so a document fits in one | Verified software milestone |
+| M25 | Output that need not go to the screen | Any command can be redirected to a file or piped into another | Verified software milestone |
+| M26 | Scrollback | Page Up and Page Down look back at what went past, two hundred lines of it | Verified software milestone |
+| M27 | Files of commands | RUN reads a file and does what it says, and a script that runs itself stops | Verified software milestone |
+| M28 | Finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
