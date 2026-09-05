@@ -110,6 +110,8 @@ DEBUG_LOG_AGAIN="$BUILD_DIR/debug-again.log"
 DISK="$BUILD_DIR/me-os-test-disk.img"
 SHOT_RESTART="${SHOT_RESTART:-$BUILD_DIR/screen-restart.ppm}"
 SHOT_SCROLLBACK="${SHOT_SCROLLBACK:-$BUILD_DIR/screen-scrollback.ppm}"
+# M33. The terminal with a program's output on it.
+SHOT_PROGRAM="${SHOT_PROGRAM:-$BUILD_DIR/screen-program.ppm}"
 SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
@@ -503,6 +505,9 @@ rectangle_centre() {
     # ME OS, running at privilege three, through a system call.
     type_line "ls /bin"
     type_line "run /bin/hello"
+    sleep 0.4
+    echo "screendump $SHOT_PROGRAM"
+    sleep 0.6
     type_line "ps"
     type_line "ls"
     type_line "help"
@@ -568,6 +573,7 @@ echo "boot-capture: restarting with the same disk to see what survived"
 
 [ -s "$SHOT_RESTART" ] || fail "QEMU produced no screenshot at $SHOT_RESTART"
 [ -s "$SHOT_SCROLLBACK" ] || fail "QEMU produced no screenshot at $SHOT_SCROLLBACK"
+[ -s "$SHOT_PROGRAM" ] || fail "QEMU produced no screenshot at $SHOT_PROGRAM"
 
 [ -s "$SHOT_BOOT" ] || fail "QEMU produced no screenshot at $SHOT_BOOT"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"

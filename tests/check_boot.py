@@ -65,6 +65,8 @@ SCREEN_WRAP_LEFT = BUILD_DIR / "screen-wrap-left.ppm"
 SCREEN_DRAG_READY = BUILD_DIR / "screen-drag-ready.ppm"
 SCREEN_DRAG_HELD = BUILD_DIR / "screen-drag-held.ppm"
 SCREEN_FOCUS_SYSTEM = BUILD_DIR / "screen-focus-system.ppm"
+# M33. The terminal with a program's output on it.
+SCREEN_PROGRAM = BUILD_DIR / "screen-program.ppm"
 SCREEN_FOCUS_DEMO = BUILD_DIR / "screen-focus-demo.ppm"
 SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
@@ -1256,10 +1258,32 @@ def check_elf() -> list[str]:
         raise CheckFailed("RUN never dispatched the file as a program, so it was "
                           "treated as a script instead")
 
+    # The program's output goes to the shell's own sink, which for a command
+    # typed at the terminal is the terminal. The log says twenty one bytes were
+    # written through the system call; this says the screen was not blank when
+    # they had been. Reading the glyphs back is check_tiles_on_screen's job and
+    # is not repeated here.
+    width, height, pixels = read_ppm(SCREEN_PROGRAM)
+    lit = 0
+    for i in range(0, len(pixels), 3):
+        if pixels[i] > 90 or pixels[i + 1] > 90 or pixels[i + 2] > 90:
+            lit += 1
+    if lit < 2000:
+        raise CheckFailed(
+            f"the screen after running the program has only {lit} lit pixels, so "
+            f"the terminal was not showing anything")
+
+    wrote = re.search(r"process: /BIN/HELLO exited\n[^\n]*\n[^\n]*\n"
+                      r"process:   bytes written (\d+)", text)
+    if wrote is None or int(wrote.group(1)) != 21:
+        raise CheckFailed("the program did not write its line through the system "
+                          "call when run from the shell")
+
     return [f"M33 ELF: /BIN/HELLO is a {size} byte executable the bootloader carried "
             f"as its own file, installed into the filesystem, parsed by the ELF "
             f"reader, mapped at 0x{entry.group(1)}, and run at privilege three both "
-            f"at boot and by typing RUN at the shell"]
+            f"at boot and by typing RUN at the shell, which wrote "
+            f"{wrote.group(1)} bytes to a {width}x{height} screen that was not blank"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
