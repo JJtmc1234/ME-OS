@@ -34,8 +34,23 @@
  * indirect block would add a second way to lose a file for a size nothing here
  * can produce. */
 #define VFS_BLOCK         512
-#define VFS_MAX_BLOCKS    256
-#define VFS_DIRECT_BLOCKS 12
+/* Raised from 256 at M36, when programs stopped being demonstrations.
+ *
+ * A program with writable data cannot be linked into one read only segment, so
+ * it is page aligned and pads out to nine kilobytes or more. Ten of those did
+ * not fit in a hundred and twenty eight kilobyte pool. This is half a megabyte,
+ * which is a lot of kernel memory to reserve statically and is still less than
+ * one percent of the smallest machine ME OS boots on. */
+#define VFS_MAX_BLOCKS    1024
+/* Raised from 12 at M36, taking the largest file from six kilobytes to
+ * thirty two. Six was chosen when the largest thing anybody would write was a
+ * text file, and it turned out to be smaller than a program.
+ *
+ * These are the only blocks a file has: there is no indirect block, so this
+ * number is the file size limit. Sixty four of them is a hundred and twenty
+ * eight bytes inside a node record, and a record is a whole sector, so the
+ * static assertions in vfsdisk_format.c still hold with room to spare. */
+#define VFS_DIRECT_BLOCKS 64
 #define VFS_FILE_MAX      (VFS_BLOCK * VFS_DIRECT_BLOCKS)
 #define VFS_PATH_MAX      256
 

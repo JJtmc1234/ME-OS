@@ -52,6 +52,7 @@ Nothing here has been booted on a physical machine yet.
 | M33 | ELF executables | A program that is a file on the disk, not part of the kernel, is read, checked, mapped and run by typing RUN | Verified software milestone |
 | M34 | Windows for programs | A program opens a window of its own, draws in it, and the window goes when the program does | Verified software milestone |
 | M35 | Input reaches a program | The keyboard and the mouse reach a program running at privilege three, and a program that will not stop is stopped | Verified software milestone |
+| M36 | Programs big enough to be real, and six games | Files hold thirty two kilobytes, code and data are separate segments, and six games run as their own executables | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1512,6 +1513,73 @@ input whenever it asks, whether or not its window is the focused one, which is
 the correct answer while only one program runs at a time and the wrong one the
 moment two can.
 
+## M36 programs big enough to be real, and six games
+
+Done. Six games run on ME OS: Snake, Pong, Breakout, Tetris, Space Invaders and
+Minesweeper. Each is its own ELF executable, carried on the disc as its own
+file, loaded into an address space of its own and run at privilege three. None
+of them is part of the kernel.
+
+**Three limits had to move first, and each was set when programs were smaller
+than programs turned out to be.**
+
+A file could hold six kilobytes. That number came from M24, where twelve blocks
+of five hundred and twelve bytes was chosen for text files, and it is smaller
+than a game. Files now hold sixty four blocks, which is thirty two kilobytes.
+There is still no indirect block, so that number is the limit and not a step
+towards one.
+
+The block pool held a hundred and twenty eight kilobytes in all. Ten programs
+did not fit in it. It is half a megabyte now, which is a lot of kernel memory to
+reserve statically and is still under one percent of the smallest machine ME OS
+boots on.
+
+**The third one mattered most and was found by somebody reading a linker
+warning.** Programs were linked with `-n`, which packs every section into one
+segment so the file stays small. That is fine while a program has no writable
+data, which was true of every program up to M35 and stopped being true of the
+first one with a score in it. A single segment holding both code and writable
+data has to be mapped writable and executable, and M34's own notes say that data
+a program can write and can also run is how a mistake in one becomes control of
+the other. Dropping `-n` costs page alignment, which is why the file limit had
+to move first, and gives back what those notes claimed: code is read and
+execute, data is read and write, and no segment is both.
+
+**The games are not toys in the dismissive sense.** They are the first programs
+that use the whole interface at once: a window, a loop, a clock, the keyboard,
+the mouse, and text. Every one of them found something. Breakout moves the ball
+in four substeps a frame so a fast ball cannot step over a brick. Snake takes
+one turn per step, because two fast presses would otherwise bend the head into
+its own neck. Tetris and Minesweeper both wait for the first key press and mix
+the time it took into the random seed, because the only other seed available is
+the process number, which is the same every run and would deal the same board
+forever.
+
+**They are all laid out from the size the desktop gave them.** Not one of them
+assumes a window size, because the tiling desktop chooses it and returns it from
+`win_open`. A game handed a short window shrinks its board rather than drawing
+off the edge.
+
+**A shared header, and deliberately not a C library.** `user/lib/util.h` holds
+the five or six things every one of these had to write for itself: setting and
+copying memory, a number as text, and a random generator. It is header only, it
+is not called a libc, and calling it the start of one would put the wrong things
+in it. A real C library is a real thing to want and is a different project.
+
+**How it is proved.** Every game was compiled with the same flags as the kernel
+and linked, then run in QEMU and photographed. Snake was driven into a wall and
+showed its game over. Invaders was fired at and its score moved. Breakout broke
+a brick. Pong served and drew both paddles, the ball and the score. Tetris
+dropped a piece into an empty well. Minesweeper dealt a sixteen by twelve board.
+The boot test carries the two programs it can drive without a person, and the
+games are checked by having been watched.
+
+**What this does not make ME OS.** It does not run anybody else's software. Every
+one of these was written against ME OS's own system calls, in a source tree that
+is part of this project, and a program from anywhere else would find no C
+library, no file to open and a system call interface that is not Linux's. That
+is what `docs/road-to-linux.md` is for, and it is a long way further than this.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1523,8 +1591,8 @@ moment two can.
 
 ## Verification status
 
-M1 to M35 are verified in QEMU by automated framebuffer inspection and by the
-kernel's own log. None has been observed on physical ME hardware, and physical
+M1 to M35 are checked in QEMU by automated framebuffer inspection and by the
+kernel's own log. The M36 games were exercised separately in QEMU. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 
 Two kinds of test run:

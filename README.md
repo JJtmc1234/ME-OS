@@ -53,8 +53,10 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M33 ELF executables | A program that is a file on the disk, not part of the kernel, is read, mapped and run | Verified software milestone, QEMU |
 | M34 windows for programs | A program opens a window of its own and draws in it, instead of printing into a terminal | Verified software milestone, QEMU |
 | M35 input reaches a program | The keyboard and the mouse reach a program, and one that will not stop is stopped | Verified software milestone, QEMU |
+| M36 six games | Snake, Pong, Breakout, Tetris, Space Invaders and Minesweeper, each its own executable | Verified software milestone, QEMU |
 
-All thirty five finished milestones are checked automatically. `make test` boots
+The first thirty five milestones are checked automatically.
+The six M36 games were exercised separately in QEMU. `make test` boots
 the image headlessly, types at it, moves the mouse, opens and closes windows,
 and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
 runs twenty five programs on the development machine with no emulator, covering
