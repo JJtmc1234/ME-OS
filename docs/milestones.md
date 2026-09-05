@@ -46,6 +46,7 @@ Nothing here has been booted on a physical machine yet.
 | M27 | Files of commands | RUN reads a file and does what it says, and a script that runs itself stops | Verified software milestone |
 | M28 | Finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone |
 | M29 | A page allocator | Physical memory is discovered from the boot map and handed out one page at a time, and no page is ever handed out twice | Verified software milestone |
+| M30 | Address spaces | Page table trees the kernel builds itself, so two of them can mean different memory by the same address, and the processor runs on one | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -989,6 +990,91 @@ more than one page at a time, no swapping, no NUMA. Those solve fragmentation
 and locality problems ME OS does not have, and a page allocator that is easy to
 reason about is worth more right now than a fast one.
 
+## M30 address spaces, so an address stops meaning one thing
+
+Done. The kernel builds x86-64 page table trees, maps and unmaps single pages
+in them, reads back what an address currently means, and has run on one it made
+itself.
+
+**What was there before.** One universe. Every address meant the same thing to
+every part of the machine, because the bootloader's page tables were still in
+use and nothing had ever built another set. That is fine while the only code
+running is the kernel's own. It becomes impossible the moment two programs are
+meant to be unable to read each other, because "unable to read" is not a rule
+anybody obeys, it is an address that does not translate.
+
+**The format, briefly.** A 48 bit address is translated through four tables of
+512 entries. Nine bits pick an entry at each level and the last twelve are the
+offset inside the page. An entry holds the physical address of the next table,
+or of the page itself at the last level, with permission bits in the space the
+alignment leaves free.
+
+**The split that made this testable.** `paging.c` is the format as arithmetic
+and touches no memory. `vmm.c` is the walk and touches page tables, but reaches
+every one of them through a direct map offset held in the address space rather
+than a constant. That one decision is why the entire walk runs in the host test
+suite over an arena of ordinary memory standing in for physical memory: the
+addresses are invented, and the offset is the distance between them and the
+real buffer. `vmmcpu.c` holds the four things that need a privileged
+instruction and has no logic in it at all.
+
+This matters more here than anywhere earlier in the project. A wrong page table
+entry does not print anything. It triple faults the virtual machine, usually
+somewhere unrelated, and often several milestones after the mistake was made.
+Sixty-eight host checks cover mapping, unmapping, translating, offsets inside a
+page, refusing to overwrite a live mapping, non canonical addresses, unaligned
+addresses, running out of memory partway through building a tree, and tearing
+one down.
+
+**Permission is the most restrictive level on the path.** The processor takes a
+mapping's permission to be the AND of every entry on the way down, which has a
+consequence that is easy to get wrong in the direction of a silent failure: a
+user page underneath a table entry with no user bit is simply unreachable from
+user mode. So intermediate entries are always present and writable, and gain
+the user bit when anything below them is a user page. Widening a parent is safe
+because every leaf still carries its own restriction, and there is a test that
+maps a kernel page and a user page under the same tables and checks the kernel
+one is still not reachable from user mode afterwards. No-execute is never set
+on the way down, because forbidding execution on a table entry would forbid it
+for every page underneath.
+
+**One kernel, mapped once.** A new address space copies the upper half of the
+kernel's top level table, entries 256 to 511. Sharing the top level entries
+rather than copying the tables beneath them means there is one kernel, seen
+identically from every process, and a change to a kernel mapping does not have
+to be repeated into every address space that exists. Those entries never carry
+the user bit, so a process can be shown the kernel is there and cannot read it.
+
+**Large pages are refused, not split.** The bootloader maps memory with two
+megabyte pages. Walking into one as though it pointed at a table would read the
+middle of a mapped page as though it were entries, and then write there.
+Splitting one while something is using it changes what an address means
+underneath its user. So the walk stops and says so.
+
+**Tearing one down frees tables and never pages.** Only the lower half is
+walked, because the upper half belongs to the kernel and is shared. Mapped
+pages are left alone: this layer maps a physical page at an address and never
+learns whether anybody else mapped the same page somewhere else, so freeing one
+would take it from whoever else holds it. A test builds a tree, destroys it,
+and checks that the tables came back and the three mapped pages did not.
+
+**How the real machine proves it.** The host tests cannot answer whether the
+processor accepts a tree this kernel built, which is a different claim from the
+tree looking right. So at boot the kernel builds a second address space, and
+before switching checks two things it cannot survive losing: that its current
+stack and its own code are both reachable in the new space. Switching to a
+space where the stack is not mapped means the next push faults, the fault
+handler needs a stack, and the machine triple faults and reboots with nothing
+on the screen and nothing in the log. Then it loads the new tree into CR3,
+reads a word back through a mapping that exists only in that space, switches
+back, and tears the space down. The boot test requires that line, requires
+no-execute to be available, and requires the teardown to return page tables.
+
+**What it does not do.** No demand paging, no copy on write, no swapping, no
+large page creation, no address space layout randomisation, and no reclaiming
+of an intermediate table that has become empty. Each of those is a real thing
+to want and none of them is needed to run a program.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1000,7 +1086,7 @@ reason about is worth more right now than a fast one.
 
 ## Verification status
 
-M1 to M29 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M30 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 
@@ -1018,7 +1104,7 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow. Twenty-one host programs run in all now, one per part, and the newest
+  overflow. Twenty-two host programs run in all now, one per part, and the newest
   of them writes a filesystem to a disk made of memory and then breaks one
   field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the

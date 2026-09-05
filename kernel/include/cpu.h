@@ -35,4 +35,12 @@ bool cpu_brand(char *out, uint64_t capacity);
 uint64_t cpu_unpack(char *out, uint64_t capacity, const char *order,
                     uint32_t a, uint32_t b, uint32_t c, uint32_t d);
 
+/* Whether the processor can forbid execution of a page.
+ *
+ * Extended leaf 0x80000001, bit 20 of EDX. Asked at M30 before the kernel ever
+ * sets the no-execute bit in a page table entry, because setting it on a
+ * processor without the feature enabled is a reserved bit violation and faults
+ * on every access to the page rather than being ignored. */
+bool cpu_has_nx(void);
+
 #endif /* ME_CPU_H */

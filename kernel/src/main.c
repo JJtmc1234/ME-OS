@@ -47,6 +47,7 @@
 #include "log.h"
 #include "mouse.h"
 #include "pmmboot.h"
+#include "vmmboot.h"
 #include "pointer.h"
 #include "rect.h"
 #include "region.h"
@@ -1850,6 +1851,11 @@ void kmain(void)
     const struct limine_hhdm_response *hhdm = hhdm_request.response;
     pmmboot_init(memmap_request.response, hhdm != NULL ? hhdm->offset : 0);
     pmmboot_selfcheck();
+
+    /* Address spaces, which need the allocator above to exist. Also not
+     * fatal: without them the kernel is exactly what it was at M28. */
+    vmmboot_init();
+    vmmboot_selfcheck();
 
     log_str("me-os: framebuffer ");
     log_dec(fb_width());

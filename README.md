@@ -47,15 +47,16 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M27 files of commands | RUN reads a file and does what it says | Verified software milestone, QEMU |
 | M28 finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone, QEMU |
 | M29 a page allocator | Physical memory discovered from the boot map, handed out a page at a time | Verified software milestone, QEMU |
+| M30 address spaces | Page tables the kernel builds itself, and the processor runs on one | Verified software milestone, QEMU |
 
-All twenty nine finished milestones are checked automatically. `make test` boots
+All thirty finished milestones are checked automatically. `make test` boots
 the image headlessly, types at it, moves the mouse, opens and closes windows,
 and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs twenty one programs on the development machine with no emulator, covering
+runs twenty two programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
 clamping, the tiling layout, the desktop, the terminal and its commands, the
-processor identification, the filesystem on disk, the text editor, the clock and
-the page allocator. See
+processor identification, the filesystem on disk, the text editor, the clock, the page
+allocator and the address spaces. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it

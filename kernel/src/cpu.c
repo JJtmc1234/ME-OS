@@ -101,6 +101,21 @@ bool cpu_brand(char *out, uint64_t capacity)
     return out[0] != '\0';
 }
 
+bool cpu_has_nx(void)
+{
+    uint32_t a, b, c, d;
+
+    /* The highest extended leaf, first. Asking for a leaf the processor does
+     * not implement returns the highest one it does, whose bit 20 means
+     * something else entirely. */
+    cpuid(0x80000000u, &a, &b, &c, &d);
+    if (a < 0x80000001u) {
+        return false;
+    }
+    cpuid(0x80000001u, &a, &b, &c, &d);
+    return (d & (1u << 20)) != 0;
+}
+
 #else
 
 /* The host tests build this file to check `cpu_unpack`, and a host is not
@@ -119,6 +134,11 @@ bool cpu_brand(char *out, uint64_t capacity)
     if (out != NULL && capacity > 0) {
         out[0] = '\0';
     }
+    return false;
+}
+
+bool cpu_has_nx(void)
+{
     return false;
 }
 

@@ -1049,6 +1049,9 @@ def check_log() -> list[str]:
         # M29. The allocator came up and proved itself against real memory.
         "pmm: ready",
         "pmm: selfcheck passed",
+        # M30. A second address space was built and the processor ran on it.
+        "vmm: no-execute available",
+        "vmm: selfcheck passed",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1106,6 +1109,37 @@ def check_pmm() -> list[str]:
     megabytes = pages * 4096 // (1024 * 1024)
     return [f"M29 page allocator: {pages} usable pages, {megabytes} MB, proved by "
             f"writing and reading back eight of them and giving all eight back"]
+
+
+# M30. Address spaces, as the real processor sees them.
+#
+# The host suite walks the whole page table tree and still cannot answer the
+# only question that matters here: whether the processor accepts a tree this
+# kernel built. Building a correct looking one and running on one are different
+# claims. So the kernel makes a second address space, checks its own stack and
+# code are reachable in it, loads it into CR3, reads a word back through a
+# mapping that exists only there, and switches back.
+def check_vmm() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    if "vmm: selfcheck passed" not in text:
+        raise CheckFailed("the kernel never ran on an address space it built itself")
+    if "vmm: no-execute available" not in text:
+        raise CheckFailed("the no-execute bit was not available, so pages cannot be "
+                          "made unrunnable and user isolation would be weaker")
+
+    tables = re.search(r"vmm: tables returned (\d+)", text)
+    if tables is None or int(tables.group(1)) < 1:
+        raise CheckFailed("tearing the address space down returned no page tables, "
+                          "so every program run would leak its own tables")
+
+    root = re.search(r"vmm: kernel page tables at 0x([0-9A-F]+)", text)
+    if root is None:
+        raise CheckFailed("the kernel never reported where its page tables are")
+
+    return [f"M30 address spaces: a second one built, loaded into CR3, read back "
+            f"through a mapping only it has, and torn down returning "
+            f"{tables.group(1)} page tables"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1519,6 +1553,7 @@ def main() -> int:
         notes += check_rotation()
         notes += check_log()
         notes += check_pmm()
+        notes += check_vmm()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()
