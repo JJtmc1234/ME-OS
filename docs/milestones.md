@@ -45,6 +45,7 @@ Nothing here has been booted on a physical machine yet.
 | M26 | Scrollback | Page Up and Page Down look back at what went past, two hundred lines of it | Verified software milestone |
 | M27 | Files of commands | RUN reads a file and does what it says, and a script that runs itself stops | Verified software milestone |
 | M28 | Finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone |
+| M29 | A page allocator | Physical memory is discovered from the boot map and handed out one page at a time, and no page is ever handed out twice | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -906,6 +907,88 @@ runs whatever came out. The kernel logs the command it ran, so if completion had
 done nothing the log would say `CAT COM` and the check would fail. It says
 `CAT COMPLETED.TXT`.
 
+## M29 a page allocator, so memory stops being decided at compile time
+
+Done. Physical memory is discovered from the memory map the bootloader hands
+over, and pages are handed out one at a time.
+
+**Why this, and why now.** Every milestone up to M28 got its memory from an
+array whose size was chosen when the kernel was compiled. The window pool is
+eight slots because somebody wrote eight. That works until something needs
+memory whose size nobody knew in advance, and every part of running a program
+is exactly that: an address space, a set of page tables, a stack, and the pages
+the program itself is loaded into. So this is the first milestone of the road
+towards running real software, and nothing above it can be built without it.
+
+**A bitmap, not a free list.** One bit per four kilobyte page, set when the page
+is in use. A free list is the other obvious choice and stores its links inside
+the free pages themselves, which means the first thing a stray write does is
+corrupt the allocator rather than the caller. The bitmap lives in one place,
+can be compared against the memory map at any moment, and costs one bit per
+page, which is a thirty-two thousandth of memory. On the 512 MB machine the
+tests boot, that is fifteen kilobytes.
+
+**Everything starts in use.** This is the decision the whole safety argument
+rests on. `pmm_reset` fills the bitmap with ones, and memory becomes available
+only by being explicitly named as usable. That inverts the usual danger.
+Forgetting to reserve something does not hand out memory that something else
+owns, it merely leaves a page unused. For the kernel's own image, the
+framebuffer, or the bootloader's tables to be handed out, the boot code would
+have to actively declare them usable, and it never does. There is exactly one
+explicit reservation in the whole of boot, for the bitmap itself, because the
+bitmap is the one thing that lives inside memory the map did call usable.
+
+**Bootloader reclaimable memory is left alone.** It genuinely is free memory and
+a later milestone should take it. It is not taken now because the memory map
+itself, the direct map response and the framebuffer description are all sitting
+in it, and this kernel reads them after boot. Handing those pages out would
+work perfectly right up until something overwrote the structure describing the
+screen. Reclaiming it is a real thing to do once everything the bootloader said
+has been copied somewhere the kernel owns.
+
+**Page zero is never available, whatever the memory map says.** The allocator
+returns a physical address and uses zero to mean it has none, so handing out
+physical page zero and failing would be the same answer, and a caller would
+treat a real page as an out of memory error. The host test that found this
+allocated every page in a small bitmap and counted them: the count came back
+one short and the first allocation looked like a failure. The guard is in
+`pmm_add_free`, which is the one place every page has to pass through to become
+available. No real memory map offers page zero anyway, because it holds the
+real mode interrupt vectors and the BIOS data area, but the invariant is not
+allowed to depend on that.
+
+**A bad free is refused and counted.** Freeing a page that is already free
+would add it to the free count twice, and the same page would then be handed to
+two callers. That does not fail where it happens. It fails later, somewhere
+unrelated, and looks like a bug in whatever was unlucky enough to be using that
+page. So a double free, and a free of an address outside the bitmap, are both
+refused and counted in `bad_frees` rather than silently ignored.
+
+**How it is proved.** Two ways, because neither is enough on its own.
+
+The allocator never dereferences a physical address, so the whole of it runs as
+an ordinary program on the development machine, where the addresses are made up
+and the bitmap is a local array. Forty-eight checks cover the bookkeeping:
+partial pages at the ends of a range, the opposite rounding that `reserve` uses
+against `add_free`, reserved pages never being handed out, every page being
+handed out exactly once and only once, running out reporting empty rather than
+wrapping, double frees, out of range frees, a bitmap whose coverage starts
+above zero, and a bitmap too small for the page count it was given.
+
+None of that can catch the one thing that only goes wrong on a real machine: a
+page the bitmap calls free that cannot actually be written, because the direct
+map offset is wrong or the memory map claimed memory that is not there. So the
+kernel proves that at boot. It takes eight pages, writes each page's own
+physical address into its first and last words, reads them back, checks no two
+were the same page, and gives all eight up again. The boot test requires the
+line saying it passed, and requires the free page count to be exactly what it
+was before.
+
+**What it does not do.** No slab allocator, no buddy system, no allocation of
+more than one page at a time, no swapping, no NUMA. Those solve fragmentation
+and locality problems ME OS does not have, and a page allocator that is easy to
+reason about is worth more right now than a fast one.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -917,9 +1000,9 @@ done nothing the log would say `CAT COM` and the check would fail. It says
 
 ## Verification status
 
-M1 to M28 are verified in QEMU by automated framebuffer inspection. None has
-been observed on physical ME hardware, and physical machine boot testing is a
-later step that has not been scheduled.
+M1 to M29 are verified in QEMU by automated framebuffer inspection and by the
+kernel's own log. None has been observed on physical ME hardware, and physical
+machine boot testing is a later step that has not been scheduled.
 
 Two kinds of test run:
 
@@ -935,7 +1018,7 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow. Twenty host programs run in all now, one per part, and the newest
+  overflow. Twenty-one host programs run in all now, one per part, and the newest
   of them writes a filesystem to a disk made of memory and then breaks one
   field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the

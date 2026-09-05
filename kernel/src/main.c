@@ -46,6 +46,7 @@
 #include "limine.h"
 #include "log.h"
 #include "mouse.h"
+#include "pmmboot.h"
 #include "pointer.h"
 #include "rect.h"
 #include "region.h"
@@ -124,6 +125,18 @@ static volatile struct limine_framebuffer_request framebuffer_request = {
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_memmap_request memmap_request = {
     .id = LIMINE_MEMMAP_REQUEST,
+    .revision = 0,
+    .response = NULL,
+};
+
+/* Where the bootloader mapped all of physical memory, so the kernel can read
+ * and write a physical address without building a mapping for it first. The
+ * page allocator's bitmap lives out there, and from M30 so do the page tables.
+ * Asked for at M29: before that nothing touched memory it had not been given
+ * the address of. */
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_hhdm_request hhdm_request = {
+    .id = LIMINE_HHDM_REQUEST,
     .revision = 0,
     .response = NULL,
 };
@@ -1827,6 +1840,16 @@ void kmain(void)
     if (!fb_init(res->framebuffers[0])) {
         fail("unsupported framebuffer layout");
     }
+
+    /* The page allocator, before anything that might want a page.
+     *
+     * Deliberately not fatal. Every milestone up to M28 got its memory from
+     * static arrays and still works without this, so a machine whose memory
+     * map cannot be read should reach a desktop and say so, rather than
+     * showing nothing at all. What needs pages checks that it has them. */
+    const struct limine_hhdm_response *hhdm = hhdm_request.response;
+    pmmboot_init(memmap_request.response, hhdm != NULL ? hhdm->offset : 0);
+    pmmboot_selfcheck();
 
     log_str("me-os: framebuffer ");
     log_dec(fb_width());

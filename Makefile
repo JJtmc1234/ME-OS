@@ -409,6 +409,10 @@ $(BUILD)/vfs_test: tests/vfs_test.c $(VFS_SRCS) $(HEADERS)
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
+$(BUILD)/pmm_test: tests/pmm_test.c kernel/src/pmm.c kernel/src/mem.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/pmm_test.c kernel/src/pmm.c kernel/src/mem.c -o $@
+
 $(BUILD)/vfsdisk_test: tests/vfsdisk_test.c kernel/src/vfsdisk.c \
                        kernel/src/vfsdisk_format.c kernel/src/vfsdisk_check.c \
                        kernel/src/disk.c $(VFS_SRCS) $(HEADERS)
@@ -490,7 +494,8 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
            $(BUILD)/shell_test $(BUILD)/desktop_test \
            $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
-           $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test
+           $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test \
+           $(BUILD)/pmm_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -511,6 +516,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/rtc_test
 	$(BUILD)/term_test
 	$(BUILD)/cpu_test
+	$(BUILD)/pmm_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

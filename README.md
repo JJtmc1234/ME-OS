@@ -39,16 +39,23 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M19 terminal and system information | A shell whose answers all come from the machine | Verified software milestone, QEMU |
 | M20 filesystem and file commands | A real tree in memory, and PWD, LS, CD, MKDIR, CAT and the rest | Verified software milestone, QEMU |
 | M21 editor, clock and a working shell | A text editor, the real time of day, history, MV, CP, WC and TREE | Verified software milestone, QEMU |
-| M22 workspaces | More than one set of tiles, switched by keyboard | Next |
+| M22 workspaces | More than one set of tiles, switched by keyboard | Verified software milestone, QEMU |
+| M23 a disk | The filesystem is written to an ATA disk and is still there after a restart | Verified software milestone, QEMU |
+| M24 files made of blocks | A file is a list of blocks from a shared pool, so a document fits in one | Verified software milestone, QEMU |
+| M25 redirection and pipes | Any command can be sent to a file or piped into another | Verified software milestone, QEMU |
+| M26 scrollback | Page Up and Page Down look back at what went past | Verified software milestone, QEMU |
+| M27 files of commands | RUN reads a file and does what it says | Verified software milestone, QEMU |
+| M28 finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone, QEMU |
+| M29 a page allocator | Physical memory discovered from the boot map, handed out a page at a time | Verified software milestone, QEMU |
 
-All twenty one finished milestones are checked automatically. `make test` boots the
-image headlessly, types at it, moves the mouse, opens and closes windows, and
-inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs nineteen programs on the development machine with no emulator, covering
+All twenty nine finished milestones are checked automatically. `make test` boots
+the image headlessly, types at it, moves the mouse, opens and closes windows,
+and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
+runs twenty one programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
-clamping, the tiling layout, the desktop, the terminal and its commands, and
-the processor identification, the filesystem, the text editor and the
-clock. See
+clamping, the tiling layout, the desktop, the terminal and its commands, the
+processor identification, the filesystem on disk, the text editor, the clock and
+the page allocator. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it
@@ -128,8 +135,8 @@ from the keyboard. The up and down arrows walk back through what you have typed.
 `DATE` asks the CMOS clock chip, which is also what the time in the top bar comes
 from.
 
-The filesystem lives in memory, because there is no disk driver yet, so nothing
-in it survives a restart and `DF` says so every time it is asked.
+The filesystem is written to an ATA disk, so what you make is still there the
+next time the machine starts. `DF` reports what is actually on it.
 
 `EDIT NAME` opens a file in the Editor window. Arrows move the cursor, typing
 inserts, Enter splits a line, Backspace at the start of one joins it to the line

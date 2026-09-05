@@ -39,6 +39,7 @@ Run through `make test`.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -1045,6 +1046,9 @@ def check_log() -> list[str]:
         "sum X=5 = 5",
         "sum X+3 = 8",
         "sum IF X>2 THEN 10 ELSE 20 = 10",
+        # M29. The allocator came up and proved itself against real memory.
+        "pmm: ready",
+        "pmm: selfcheck passed",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1062,6 +1066,46 @@ def check_log() -> list[str]:
             f"both conditionals, and X stored then used twice")
     return notes
 
+
+
+# M29. The physical page allocator, as the real machine sees it.
+#
+# The host suite covers the bitmap arithmetic completely and cannot cover this:
+# whether the pages the bitmap calls free can actually be written. The kernel
+# proves that at boot by taking eight pages, writing each one's own physical
+# address into it, reading it back and giving them up again. What is checked
+# here is that it said so, and that the numbers are the shape of a real machine
+# rather than a zero that would make the self check vacuous.
+MIN_USABLE_PAGES = 1000
+
+
+def check_pmm() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    match = re.search(r"pmm: usable pages (\d+)", text)
+    if match is None:
+        raise CheckFailed("the kernel never reported how many pages it found")
+    pages = int(match.group(1))
+    if pages < MIN_USABLE_PAGES:
+        raise CheckFailed(
+            f"the allocator found only {pages} usable pages, which is too few "
+            f"for the self check to have proved anything")
+
+    after = re.search(r"pmm: selfcheck passed, pages still free (\d+)", text)
+    if after is None:
+        raise CheckFailed("the allocator self check did not pass")
+    if int(after.group(1)) != pages:
+        raise CheckFailed(
+            f"the allocator started with {pages} free pages and ended the self "
+            f"check with {after.group(1)}, so a page went missing")
+
+    bitmap = re.search(r"pmm: bitmap bytes (\d+)", text)
+    if bitmap is None:
+        raise CheckFailed("the kernel never reported the size of the page bitmap")
+
+    megabytes = pages * 4096 // (1024 * 1024)
+    return [f"M29 page allocator: {pages} usable pages, {megabytes} MB, proved by "
+            f"writing and reading back eight of them and giving all eight back"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1474,6 +1518,7 @@ def main() -> int:
                                 in_demo(drag_release_cursor), size)
         notes += check_rotation()
         notes += check_log()
+        notes += check_pmm()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()

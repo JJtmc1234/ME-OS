@@ -85,3 +85,45 @@ void log_stage(const char *stage)
     log_str(stage);
     log_str("\n");
 }
+
+void log_hex(uint64_t value)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    char out[16];
+    int n = 0;
+
+    log_str("0x");
+    if (value == 0) {
+        putc('0');
+        return;
+    }
+    while (value > 0 && n < (int)sizeof(out)) {
+        out[n++] = digits[value & 0xF];
+        value >>= 4;
+    }
+    while (n > 0) {
+        putc(out[--n]);
+    }
+}
+
+void log_named_dec(const char *label, uint64_t value)
+{
+    log_str(label);
+    log_str(" ");
+    log_dec(value);
+    log_str("\n");
+}
+
+void log_named_hex(const char *label, uint64_t value)
+{
+    log_str(label);
+    log_str(" ");
+    log_hex(value);
+    log_str("\n");
+}
+
+void log_line(const char *text)
+{
+    log_str(text);
+    log_str("\n");
+}
