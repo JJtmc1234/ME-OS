@@ -51,6 +51,7 @@ void cmdexec_program(struct cmd_context *context, const char *name,
     bool clean = process_run(proc);
     int64_t code = proc->exit_code;
     bool faulted = proc->faulted;
+    bool overran = proc->overran;
     uint64_t vector = proc->fault_vector;
     uint64_t at = proc->fault_address;
 
@@ -66,6 +67,13 @@ void cmdexec_program(struct cmd_context *context, const char *name,
         cmd_print(context->out, trap_name(vector));
         cmd_print(context->out, " AT ");
         cmd_print_number(context->out, at);
+        cmd_newline(context->out);
+    } else if (overran) {
+        /* Said in words rather than as a number. The exit code for this is
+         * negative, and printing it as one would put a twenty digit unsigned
+         * number on the screen where a person wanted a reason. */
+        cmd_print(context->out, name);
+        cmd_print(context->out, " WAS STOPPED FOR RUNNING TOO LONG");
         cmd_newline(context->out);
     } else if (code != 0) {
         cmd_print(context->out, name);

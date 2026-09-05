@@ -84,7 +84,38 @@ struct process {
      * desktop keeps the pointer for as long as the window exists and a program
      * that overwrote its own string would change what the taskbar says. */
     char window_title[PROC_NAME_MAX];
+
+    /* Timer counts spent running, added up on every system call. Added at M35,
+     * when a program first had a reason to loop forever. */
+    uint64_t ran_counts;
+    /* Ended by the kernel rather than by itself or by a fault. Not a fault:
+     * the program did nothing illegal, it was either running when somebody
+     * wanted it to stop or running longer than anything here should. */
+    bool overran;
+    /* What to tell the person. Points at a string literal in the kernel. */
+    const char *stopped_because;
 };
+
+/* How long a program may run before the kernel stops it, in seconds.
+ *
+ * A stopgap, and worth being exact about what it does and does not do. It is
+ * checked on every system call, so it stops a program that loops asking for
+ * input, which is the first kind of program that can loop forever and is
+ * exactly what M35 makes possible. It cannot stop a tight loop that makes no
+ * system call at all, because with interrupts off nothing can take the
+ * processor back. That needs a timer interrupt, and until there is one a
+ * program can still hang the machine.
+ *
+ * Ten seconds because no program here does anything for that long, and because
+ * a person watching a machine that has stopped will wait about that long
+ * before reaching for the power. */
+/* Five minutes. It was ten seconds when the only programs were demonstrations
+ * that drew something and stopped. A game is played for as long as somebody
+ * wants to play it, so a limit short enough to be a useful watchdog is also
+ * short enough to end a game somebody was winning. The limit is now a backstop
+ * against a program nobody is watching, and the key below is what a person
+ * uses to stop one they are. */
+#define PROC_SECONDS_MAX 300
 
 /* Installs the trap handler that makes a fault in a program survivable, and
  * opens the system call gate. Called once at boot. */
@@ -117,6 +148,14 @@ bool process_add_page_at(struct process *proc, uint64_t virt, uint64_t flags,
  * This blocks. There is no scheduler yet, so the shell that started a program
  * waits for it, exactly as a shell waits for a command today. */
 bool process_run(struct process *proc);
+
+/* Ends a running program now, from inside a system call. Does not return.
+ *
+ * The one way a program is stopped by something other than itself, used both by
+ * the runtime limit and by the key a person presses. `why` is logged and is
+ * what the shell reports, so it says what happened rather than leaving a
+ * negative exit code to be explained. */
+void process_stop(struct process *proc, int64_t code, const char *why);
 
 /* Frees every page and the address space. */
 void process_destroy(struct process *proc);

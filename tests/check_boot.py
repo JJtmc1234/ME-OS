@@ -69,6 +69,8 @@ SCREEN_FOCUS_SYSTEM = BUILD_DIR / "screen-focus-system.ppm"
 SCREEN_PROGRAM = BUILD_DIR / "screen-program.ppm"
 # M34. A window a program opened and drew in.
 SCREEN_WINDOW = BUILD_DIR / "screen-window.ppm"
+# M35. What a program drew because the mouse was dragged over it.
+SCREEN_DRAWN = BUILD_DIR / "screen-drawn.ppm"
 SCREEN_FOCUS_DEMO = BUILD_DIR / "screen-focus-demo.ppm"
 SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
@@ -1073,6 +1075,10 @@ def check_log() -> list[str]:
         # M34. A program opened a window of its own and drew in it.
         "exec: running /BIN/PAINT",
         "winsys: /BIN/PAINT opened a window",
+        # M35. Input reached a program, and a program that would not stop was
+        # stopped without taking the machine with it.
+        "winsys: /BIN/DRAW opened a window",
+        "process: /BIN/SPIN stopped: somebody pressed control and C",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1347,6 +1353,69 @@ def check_window() -> list[str]:
     return [f"M34 windows: a program opened a {width}x{height} window of its own, "
             f"drew {len(PAINT_COLOURS)} colours no other part of ME OS draws, and all "
             f"six reached the screen ({sum(counts.values())} pixels of them)"]
+
+
+# M35. Input reaching a program, and a program that will not stop.
+#
+# The drawing program picks a colour from a number key and draws where the
+# mouse is dragged. So a screen with exactly the third colour on it, in a place
+# nothing else draws, is evidence that both a key press and a run of mouse
+# packets reached a program running at privilege three, and that the program
+# acted on them.
+#
+# The third colour is the one the harness presses 3 for. Choosing a specific
+# one matters: a check that accepted any of the six would pass if the key press
+# were lost and the program stayed on its default.
+DRAW_CHOSEN = (250, 190, 60)
+
+
+def check_input() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    if "winsys: /BIN/DRAW opened a window" not in text:
+        raise CheckFailed("the drawing program never opened a window")
+
+    _, _, pixels = read_ppm(SCREEN_DRAWN)
+    drawn = 0
+    for i in range(0, len(pixels), 3):
+        if (pixels[i], pixels[i + 1], pixels[i + 2]) == DRAW_CHOSEN:
+            drawn += 1
+
+    # The strip of swatches the program paints is one square of each colour, so
+    # a lost key press would still leave some of this colour on screen. The
+    # drag paints thirteen squares of ten pixels, so anything above the swatch
+    # alone is the drag having been received.
+    swatch = 22 * 12
+    if drawn <= swatch * 2:
+        raise CheckFailed(
+            f"only {drawn} pixels of the chosen colour are on screen, which is "
+            f"about the colour swatch alone, so either the number key or the "
+            f"mouse drag never reached the program")
+
+    exited = re.search(r"process: /BIN/DRAW exited\nprocess:   code (-?\d+)", text)
+    if exited is None:
+        raise CheckFailed("the drawing program never exited, so Escape did not reach it")
+    if exited.group(1) != "0":
+        raise CheckFailed(
+            f"the drawing program exited with {exited.group(1)}, which is what it "
+            f"returns when nothing was drawn")
+
+    # And the program that will not stop. It loops asking for input and never
+    # exits, so the only ways out are the five minute runtime limit and this.
+    stopped = "process: /BIN/SPIN stopped: somebody pressed control and C"
+    if stopped not in text:
+        raise CheckFailed("a program that loops forever was not stopped by control and C")
+
+    # The machine has to still be there afterwards, which is the whole point.
+    after = text.split(stopped, 1)[1]
+    if "terminal ran PS" not in after:
+        raise CheckFailed("nothing ran after the runaway program was stopped, so the "
+                          "machine did not survive it")
+
+    return [f"M35 input: a number key and a mouse drag both reached a program, which "
+            f"drew {drawn} pixels of the colour that key chose, and stopped when "
+            f"Escape reached it. A program that would not stop was ended by control "
+            f"and C, a key it never saw, and the shell carried on"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1765,6 +1834,7 @@ def main() -> int:
         notes += check_userspace()
         notes += check_elf()
         notes += check_window()
+        notes += check_input()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()

@@ -51,6 +51,7 @@ Nothing here has been booted on a physical machine yet.
 | M32 | User mode, processes and system calls | A program runs at privilege three in its own address space, writes through a system call, and exits, and a broken one is stopped without taking the machine | Verified software milestone |
 | M33 | ELF executables | A program that is a file on the disk, not part of the kernel, is read, checked, mapped and run by typing RUN | Verified software milestone |
 | M34 | Windows for programs | A program opens a window of its own, draws in it, and the window goes when the program does | Verified software milestone |
+| M35 | Input reaches a program | The keyboard and the mouse reach a program running at privilege three, and a program that will not stop is stopped | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1429,6 +1430,88 @@ than something you can look at. No second window, no resizing, no images, no
 drawing a single pixel, and no way for a program to know its window was
 covered, because on a tiling desktop it cannot be.
 
+## M35 input reaches a program, so a window becomes something you can use
+
+Done. A program reads key presses and mouse movement, draws where the pointer
+is dragged, changes what it draws on a number key, and stops when Escape
+reaches it. A program that loops forever is stopped by the kernel and the
+machine carries on.
+
+**The difference this makes.** A window with pixels in it is a picture. A
+window that answers the mouse is a program. M34 could paint and could not be
+used, and everything between here and a file manager, an editor or a browser is
+on this side of the line.
+
+**A program only gets input because it asks for it.** There is no scheduler, so
+while a program runs the main loop is stopped inside it and nothing else is
+reading the keyboard. The event call therefore reads the hardware itself. A
+program that stops asking stops the machine's input with it, which is coherent
+rather than good: while a program runs, it has the machine. That is the sentence
+a scheduler deletes.
+
+**The position is in window coordinates by the time a program sees it.** The
+kernel polls in screen coordinates because that is where the pointer lives and
+where the cursor is drawn from, and `winsys` subtracts the window's origin on
+the way out. A program has no idea where its window is and is not told: given a
+screen position it would need an origin too, and a tiling desktop that moved the
+window underneath it would then be handing out stale numbers.
+
+**The event structure is an agreement between two programs that share no
+header.** Fixed widths, fixed order, and a reserved field so the shape can grow
+without moving what is already in it. `user/lib/sys.h` declares it separately
+from the kernel, which is the same decision as the call numbers and for the same
+reason.
+
+**A program can now loop forever, so the kernel had to learn to stop one.** This
+is the first milestone where a program has a reason not to exit, and a program
+that keeps the processor keeps it. There are two ways out and they are for
+different situations.
+
+Control and C is the one a person uses. The kernel reads the keyboard on the
+program's behalf, so it sees that key before the program does and never delivers
+it. That matters: a program that could read it could decide to ignore it, and
+the whole point is to end a program that is not cooperating.
+
+The other is a runtime limit, which is a backstop for a program nobody is
+watching. Every system call is charged the time since the last one and a program
+past five minutes is stopped. It was ten seconds when the only programs were
+demonstrations that drew something and stopped, and five minutes once a game was
+something somebody might play. Neither is a fault: the program did nothing
+illegal, and both are reported in words rather than as an exit code.
+
+Worth being exact about what that does not do. It only fires when the program
+makes a system call. A tight loop that makes none still hangs the machine,
+because with interrupts off nothing can take the processor back. That needs a
+timer interrupt, and until there is one this is a stopgap rather than a
+guarantee.
+
+**The timer is read in one place.** It reports how long since the last read, so
+two readers would each get part of the answer. Everything that waits goes
+through the same function, which is what makes the running total the real one.
+
+**How it is proved.** The boot test runs the drawing program, presses `3`,
+drags the mouse across the window with the button held, screenshots, and presses
+Escape. The check then counts pixels of exactly the colour that key chooses.
+Exactly that one matters: a check that accepted any of the six would pass if the
+key press were lost and the program stayed on its default, and the count has to
+exceed the colour swatch the program paints for itself, or a lost drag would
+pass too. Escape reaching the program is proved by the program exiting at all,
+and by the exit code, which is the one it returns only when something was
+actually drawn.
+
+Then it runs the program that will not stop, presses control and C, and checks
+that the kernel said so and that the shell ran another command afterwards. The
+last part is the point: the machine is still there. The five minute limit is not
+tested by the boot suite, because a test that waited for it would be five
+minutes long.
+
+**What it does not do.** No key release events, because the keyboard decoder
+produces key down reliably and releases not at all. No modifiers reported to a
+program. No mouse buttons other than the left one. No focus: a program gets
+input whenever it asks, whether or not its window is the focused one, which is
+the correct answer while only one program runs at a time and the wrong one the
+moment two can.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1440,7 +1523,7 @@ covered, because on a tiling desktop it cannot be.
 
 ## Verification status
 
-M1 to M34 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M35 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 

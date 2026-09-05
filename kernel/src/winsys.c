@@ -174,3 +174,56 @@ void winsys_release(struct process *proc)
         hooks.relayout();
     }
 }
+
+int64_t winsys_event(struct process *proc, uint64_t into)
+{
+    if (client_of(proc) == NULL) {
+        return SYS_ENOWINDOW;
+    }
+    if (hooks.poll_input == NULL) {
+        return 0;
+    }
+
+    struct winsys_input raw;
+    if (!hooks.poll_input(&raw) || raw.kind == WINSYS_NONE) {
+        return 0;
+    }
+
+    /* Control and C, which the program is never told about.
+     *
+     * With no scheduler a program that keeps asking for input keeps the
+     * machine, and the runtime limit is five minutes, which is a long time to
+     * watch a program you want to stop. This is the way out, and it works
+     * because it is the kernel that reads the keyboard on the program's
+     * behalf. Delivering it and hoping the program acted on it would be asking
+     * a program that will not stop to stop itself. */
+    if (raw.stop_requested) {
+        process_stop(proc, -3, "somebody pressed control and C");
+    }
+
+    struct sys_event out = {
+        .kind = raw.kind,
+        .key = raw.key,
+        .x = 0,
+        .y = 0,
+        .buttons = raw.buttons,
+        .reserved = 0,
+    };
+
+    if (raw.kind == WINSYS_POINTER) {
+        /* Screen coordinates on the way in, window coordinates on the way out.
+         * A program has no idea where its window is and should not be told:
+         * given a screen position it would have to be given an origin too, and
+         * then a tiling desktop that moved the window under it would be handing
+         * out stale numbers. */
+        const struct region where =
+            desktop_client_region(hooks.desktop, proc->window_id, 0, 0, 1, 1);
+        out.x = (int32_t)(raw.screen_x - where.x);
+        out.y = (int32_t)(raw.screen_y - where.y);
+    }
+
+    if (!uaccess_copy_out(&proc->space, into, &out, sizeof out)) {
+        return SYS_EFAULT;
+    }
+    return 1;
+}

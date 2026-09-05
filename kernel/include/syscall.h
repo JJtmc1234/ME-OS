@@ -64,6 +64,8 @@
 #define SYS_WIN_TEXT  12
 #define SYS_WIN_FLUSH 13
 #define SYS_WIN_CLOSE 14
+/* Reads one input event, or reports that none was waiting. Added at M35. */
+#define SYS_WIN_EVENT 16
 
 /* Waits, so a program can be looked at. Takes milliseconds.
  *
@@ -102,6 +104,19 @@
 #define SYS_EFAULT    (-2)
 #define SYS_EBADFD    (-3)
 #define SYS_ETOOBIG   (-4)
+/* Named keys, above every character so a program can tell them apart with one
+ * comparison. */
+#define SYS_KEY_ESCAPE    0x100u
+#define SYS_KEY_ENTER     0x101u
+#define SYS_KEY_BACKSPACE 0x102u
+#define SYS_KEY_TAB       0x103u
+#define SYS_KEY_UP        0x104u
+#define SYS_KEY_DOWN      0x105u
+#define SYS_KEY_LEFT      0x106u
+#define SYS_KEY_RIGHT     0x107u
+#define SYS_KEY_PAGEUP    0x108u
+#define SYS_KEY_PAGEDOWN  0x109u
+
 /* No window, or not this program's window. */
 #define SYS_ENOWINDOW (-5)
 /* A size or a coordinate that is not usable. */

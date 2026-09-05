@@ -60,6 +60,7 @@
 #include "timer.h"
 #include "trap.h"
 #include "vars.h"
+#include "syscall.h"
 #include "window.h"
 #include "winsys.h"
 
@@ -925,6 +926,96 @@ static void install_modules(void)
         log_dec(file->size);
         log_str(" bytes\n");
     }
+}
+
+
+
+/* The code a program is given for a key that has a name rather than a
+ * character.
+ *
+ * A table and a whole comparison, rather than the first letter or two. The
+ * first version matched prefixes, which was fine while there were four names
+ * and would have quietly turned PAGEUP into something else the moment the
+ * arrows arrived. Names come from kbd.c and there is nothing here that would
+ * notice one being renamed, so the comparison is the whole string. */
+static uint32_t named_key_code(const char *name)
+{
+    static const struct { const char *name; uint32_t code; } names[] = {
+        { "ESCAPE",    SYS_KEY_ESCAPE },
+        { "ENTER",     SYS_KEY_ENTER },
+        { "BACKSPACE", SYS_KEY_BACKSPACE },
+        { "TAB",       SYS_KEY_TAB },
+        { "UP",        SYS_KEY_UP },
+        { "DOWN",      SYS_KEY_DOWN },
+        { "LEFT",      SYS_KEY_LEFT },
+        { "RIGHT",     SYS_KEY_RIGHT },
+        { "PAGEUP",    SYS_KEY_PAGEUP },
+        { "PAGEDOWN",  SYS_KEY_PAGEDOWN },
+    };
+    for (uint64_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        const char *a = names[i].name;
+        const char *b = name;
+        while (*a != '\0' && *a == *b) {
+            a++;
+            b++;
+        }
+        if (*a == '\0' && *b == '\0') {
+            return names[i].code;
+        }
+    }
+    /* A key with a name this does not know. Zero, which a program reads as no
+     * key rather than as some other key. */
+    return 0;
+}
+
+/* Reads the keyboard and the mouse once, for a program that asked.
+ *
+ * The main loop is stopped inside the program while it runs, so this is the
+ * only thing reading input at that moment. A program that never asks gets
+ * nothing and nothing else gets anything either, which is coherent rather than
+ * good: while a program runs it has the machine. A scheduler is what makes
+ * that stop being true.
+ *
+ * The pointer moves here, so the cursor is in the right place the next time
+ * anything composes. The program does not know where the pointer is on the
+ * screen and is not told: winsys turns this into window coordinates.
+ */
+static bool program_poll_input(struct winsys_input *out)
+{
+    out->kind = WINSYS_NONE;
+    out->key = 0;
+    out->buttons = 0;
+    out->stop_requested = false;
+    out->screen_x = pointer_state.x;
+    out->screen_y = pointer_state.y;
+
+    struct kbd_key key;
+    if (kbd_poll(&key)) {
+        out->kind = WINSYS_KEY;
+        if (key.ctrl && key.ch == 'C') {
+            /* Not delivered. See winsys_event: a program that could read this
+             * could also decide to ignore it. */
+            out->stop_requested = true;
+            return true;
+        }
+        if (key.ch != '\0') {
+            out->key = (uint32_t)(unsigned char)key.ch;
+        } else if (key.name != NULL) {
+            out->key = named_key_code(key.name);
+        }
+        return true;
+    }
+
+    struct mouse_delta moved;
+    if (mouse_poll(&moved)) {
+        pointer_move(&pointer_state, moved.dx, moved.dy, fb_width(), fb_height());
+        out->kind = WINSYS_POINTER;
+        out->screen_x = pointer_state.x;
+        out->screen_y = pointer_state.y;
+        out->buttons = moved.left ? 1u : 0u;
+        return true;
+    }
+    return false;
 }
 
 static struct surface *terminal_client(void)
@@ -2184,6 +2275,7 @@ void kmain(void)
             .desktop = &desktop,
             .relayout = relayout_desktop,
             .present = present_desktop,
+            .poll_input = program_poll_input,
         };
         winsys_attach(&hooks);
     }

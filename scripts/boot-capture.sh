@@ -114,6 +114,8 @@ SHOT_SCROLLBACK="${SHOT_SCROLLBACK:-$BUILD_DIR/screen-scrollback.ppm}"
 SHOT_PROGRAM="${SHOT_PROGRAM:-$BUILD_DIR/screen-program.ppm}"
 # M34. A window a program opened and drew in.
 SHOT_WINDOW="${SHOT_WINDOW:-$BUILD_DIR/screen-window.ppm}"
+# M35. A window a program drew in because the mouse was moved over it.
+SHOT_DRAWN="${SHOT_DRAWN:-$BUILD_DIR/screen-drawn.ppm}"
 SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
@@ -192,8 +194,25 @@ move_pointer_to() {
 # The monitor names keys rather than taking characters, and the few punctuation
 # marks a path needs have names of their own. Anything not listed is sent as
 # itself, which covers the letters and the digits.
+# How many commands the shell has finished. Read from the kernel rather than
+# counted here, so a line that was typed but never reached the shell does not
+# look like one that ran.
+commands_run() {
+    local n
+    n=$(grep -c "me-os: terminal ran " "$SERIAL_LOG" 2>/dev/null || true)
+    echo "${n:-0}"
+}
+
+# Types a line and presses Enter.
+#
+# A second argument of "nowait" skips waiting for the shell to acknowledge it.
+# That matters for a line that starts a program: the shell does not say it ran
+# the command until the program has finished, because it waits for it, so
+# waiting here would mean never taking a screenshot while a program is on the
+# screen. Which is the only time there is anything to photograph.
 type_line() {
-    local text="$1" i c
+    local text="$1" wait_for="${2:-wait}" i c before
+    before=$(commands_run)
     for ((i = 0; i < ${#text}; i++)); do
         c="${text:$i:1}"
         case "$c" in
@@ -208,7 +227,53 @@ type_line() {
         sleep 0.07
     done
     echo "sendkey ret"
-    sleep 0.6
+    # Wait for the shell to say it ran something, rather than for a fixed
+    # moment. Under load on the host the guest falls behind the keys being
+    # typed at it, and the next thing this script does then happens against a
+    # machine that has not caught up. Every failure of this test that was not a
+    # real bug has had that shape.
+    #
+    # The editor swallows Enter rather than running a command, so a line typed
+    # into it never increases the count. Falling through after a short wait is
+    # correct there and is why this does not fail when the count does not move.
+    if [ "$wait_for" = "wait" ]; then
+        wait_for_log "me-os: terminal ran " $(( before + 1 )) 3 >/dev/null 2>&1 || true
+    fi
+    sleep 0.2
+}
+
+
+# Waits until the kernel has said a thing enough times, or gives up.
+#
+# Most of the pauses in this script are fixed sleeps, which assume the guest
+# keeps up with the commands being typed at it. Under load on the host that
+# assumption fails: key presses queue in the controller, the kernel drains them
+# a moment later, and a screenshot taken on a timer photographs the screen
+# before the change it was meant to capture. That is how this failed with the
+# rectangle still drifting and the key line still reading LAST KEY ENTER, three
+# arrow presses after it should have said DOWN.
+#
+# Waiting for the kernel's own account of what it did turns that from a failure
+# that depends on what else the machine is doing into a slower pass. Same idea
+# as `rectangle_centre`, which has read the log to aim the drag since M27.
+wait_for_log() {
+    local phrase="$1" want="$2" limit="${3:-20}" waited=0 have
+    while :; do
+        have=$(grep -c "$phrase" "$SERIAL_LOG" 2>/dev/null || true)
+        have=${have:-0}
+        if [ "$have" -ge "$want" ]; then
+            # A moment more, so the frame the kernel drew after saying this has
+            # reached the screen before it is photographed.
+            sleep 0.4
+            return 0
+        fi
+        sleep 0.25
+        waited=$(( waited + 1 ))
+        if [ "$waited" -gt $(( limit * 4 )) ]; then
+            echo "boot-capture: gave up waiting for $want of '$phrase'" >&2
+            return 1
+        fi
+    done
 }
 
 # The middle of the M5 rectangle, in screen coordinates, from what the kernel
@@ -266,6 +331,11 @@ rectangle_centre() {
 
 # The monitor reads these commands from stdin once the guest has booted.
 {
+    # Whatever happens below, the machine is told to stop. Without this a run
+    # that fails part way leaves QEMU alive holding the test disk, and the next
+    # run fails to take the write lock with an error that says nothing about
+    # what actually went wrong. Found the hard way.
+    trap 'echo "quit"' EXIT
     sleep "$BOOT_WAIT"
     echo "screendump $SHOT_BOOT"
     sleep 2
@@ -339,32 +409,36 @@ rectangle_centre() {
     sleep 2
     echo "screendump $SHOT_VARIF"
     sleep 2
+    moves=0
     for key in $STEER_DOWN_KEYS; do
         echo "sendkey $key"
+        moves=$(( moves + 1 ))
         sleep "$TYPE_DELAY"
     done
-    sleep 2
+    wait_for_log "me-os: rectangle moved to" "$moves"
     echo "screendump $SHOT_STEER_DOWN"
-    sleep 2
+    sleep 1
     for key in $STEER_LEFT_KEYS; do
         echo "sendkey $key"
+        moves=$(( moves + 1 ))
         sleep "$TYPE_DELAY"
     done
-    sleep 2
+    wait_for_log "me-os: rectangle moved to" "$moves"
     echo "screendump $SHOT_STEER_LEFT"
-    sleep 2
+    sleep 1
     echo "sendkey down"
-    sleep "$TYPE_DELAY"
-    sleep 2
+    moves=$(( moves + 1 ))
+    wait_for_log "me-os: rectangle moved to" "$moves"
     echo "screendump $SHOT_WRAP_DOWN"
-    sleep 2
+    sleep 1
     for ((press = 0; press < WRAP_LEFT_PRESSES; press++)); do
         echo "sendkey left"
+        moves=$(( moves + 1 ))
         sleep "$TYPE_DELAY"
     done
-    sleep 2
+    wait_for_log "me-os: rectangle moved to" "$moves"
     echo "screendump $SHOT_WRAP_LEFT"
-    sleep 2
+    sleep 1
     # M11. Land the pointer in the middle of the rectangle, wherever the M5
     # drift has carried it to. The kernel reports its position once a second, so
     # aiming is a matter of reading that rather than guessing at a place it will
@@ -457,7 +531,7 @@ rectangle_centre() {
     type_line "  workspaces next"
     type_line "  then a disk driver"
     echo "sendkey ctrl-o"
-    sleep 1
+    wait_for_log "me-os: editor saved" 1
     echo "sendkey ctrl-left"
     sleep 1
     type_line "cat todo.txt"
@@ -518,13 +592,51 @@ rectangle_centre() {
     # Nothing else on the machine moves during that wait. There is no scheduler
     # yet, so the shell is stopped inside the program, which is why the wait has
     # to be long enough to catch and short enough to end.
-    type_line "run /bin/paint"
+    type_line "run /bin/paint" nowait
     sleep 0.9
     echo "screendump $SHOT_WINDOW"
     # Long enough for the hold to finish and the window to close, before
     # anything else is typed. Keys pressed while a program runs are pressed at a
     # machine that is not reading the keyboard.
     sleep 3
+    # M35. A program that answers the mouse and the keyboard. It draws where
+    # the pointer is dragged, changes colour on a number key, and stops on
+    # Escape. Nothing else on the machine reads input while it runs, so every
+    # key and every mouse packet below reaches the program and only it.
+    type_line "run /bin/draw" nowait
+    sleep 1.2
+    echo "sendkey 3"
+    sleep 0.3
+    # Into the middle of the program's window, then drag with the button held.
+    move_pointer_to 960 660
+    sleep 0.4
+    echo "mouse_button 1"
+    sleep 0.3
+    for step in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        echo "mouse_move 14 6"
+        sleep 0.12
+    done
+    echo "mouse_button 0"
+    sleep 0.5
+    echo "screendump $SHOT_DRAWN"
+    sleep 0.4
+    echo "sendkey esc"
+    sleep 1.5
+    # M35. A program that will not stop, which is a thing input loops make
+    # possible. It faults at no point and does nothing illegal, so nothing
+    # before this milestone could have ended it.
+    #
+    # Control and C is what a person presses. The kernel reads it on the
+    # program's behalf and never delivers it, which is the whole point: a
+    # program that could read it could decide to ignore it.
+    #
+    # The runtime limit is the other way out and is not tested here, because it
+    # is five minutes and a test that waited for it would be five minutes long.
+    type_line "run /bin/spin" nowait
+    sleep 2
+    echo "sendkey ctrl-c"
+    wait_for_log "process: /BIN/SPIN stopped" 1
+    sleep 1
     type_line "ps"
     type_line "ls"
     type_line "help"
@@ -573,6 +685,11 @@ rectangle_centre() {
 # be asked for it has already been proved.
 echo "boot-capture: restarting with the same disk to see what survived"
 {
+    # Whatever happens below, the machine is told to stop. Without this a run
+    # that fails part way leaves QEMU alive holding the test disk, and the next
+    # run fails to take the write lock with an error that says nothing about
+    # what actually went wrong. Found the hard way.
+    trap 'echo "quit"' EXIT
     sleep "$BOOT_WAIT"
     sleep 4
     echo "screendump $SHOT_RESTART"
@@ -592,6 +709,7 @@ echo "boot-capture: restarting with the same disk to see what survived"
 [ -s "$SHOT_SCROLLBACK" ] || fail "QEMU produced no screenshot at $SHOT_SCROLLBACK"
 [ -s "$SHOT_PROGRAM" ] || fail "QEMU produced no screenshot at $SHOT_PROGRAM"
 [ -s "$SHOT_WINDOW" ] || fail "QEMU produced no screenshot at $SHOT_WINDOW"
+[ -s "$SHOT_DRAWN" ] || fail "QEMU produced no screenshot at $SHOT_DRAWN"
 
 [ -s "$SHOT_BOOT" ] || fail "QEMU produced no screenshot at $SHOT_BOOT"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"

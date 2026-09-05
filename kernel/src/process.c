@@ -103,6 +103,28 @@ static bool on_user_trap(struct trapframe *frame)
     return false;
 }
 
+void process_stop(struct process *proc, int64_t code, const char *why)
+{
+    if (proc == NULL) {
+        return;
+    }
+    proc->overran = true;
+    proc->stopped_because = why;
+    proc->exit_code = code;
+    proc->state = PROC_EXITED;
+
+    log_str("process: ");
+    log_str(proc->name);
+    log_str(" stopped: ");
+    log_str(why);
+    log_str("\n");
+    log_named_dec("process:   system calls", proc->syscalls);
+
+    /* Leaves through the kernel stack saved when the program was entered, so
+     * this returns from process_run rather than from here. */
+    proc_leave_user(proc);
+}
+
 void process_init(void)
 {
     trap_set_user_handler(on_user_trap);

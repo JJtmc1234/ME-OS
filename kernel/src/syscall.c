@@ -14,7 +14,9 @@
 #include "uaccess.h"
 #include "winsys.h"
 
+/* In procenter.S. Used by exit, which leaves rather than returns. */
 void proc_leave_user(struct process *proc);
+
 
 static uint64_t served;
 static uint64_t refused;
@@ -33,6 +35,7 @@ const char *syscall_name(uint64_t number)
     case SYS_WIN_TEXT:  return "win_text";
     case SYS_WIN_FLUSH: return "win_flush";
     case SYS_WIN_CLOSE: return "win_close";
+    case SYS_WIN_EVENT: return "win_event";
     case SYS_HOLD:      return "hold";
     default:         return "unknown";
     }
@@ -79,6 +82,20 @@ static int64_t do_write(struct process *proc, struct trapframe *frame)
     return (int64_t)bytes;
 }
 
+/* Reads the timer and charges the time to the program.
+ *
+ * One place, because the timer reports how long since the last read and two
+ * readers would each see part of the answer. Everything that waits goes
+ * through here so the running total is the real one. */
+static uint64_t take_counts(struct process *proc)
+{
+    const uint64_t counts = timer_poll();
+    if (proc != NULL) {
+        proc->ran_counts += counts;
+    }
+    return counts;
+}
+
 /* hold(ticks), so a program can be looked at.
  *
  * The timer counts down and wraps about eighteen times a second, and reading
@@ -96,7 +113,7 @@ static int64_t do_write(struct process *proc, struct trapframe *frame)
  *
  * Bounded, because with interrupts off nothing can interrupt this. A program
  * that asked to wait forever would be a program that stopped the machine. */
-static int64_t do_hold(uint64_t milliseconds)
+static int64_t do_hold(struct process *proc, uint64_t milliseconds)
 {
     if (milliseconds > SYS_HOLD_MAX_MS) {
         milliseconds = SYS_HOLD_MAX_MS;
@@ -110,7 +127,7 @@ static int64_t do_hold(uint64_t milliseconds)
     const uint64_t want = (milliseconds * TIMER_HZ) / 1000u;
     uint64_t waited = 0;
     while (waited < want) {
-        waited += timer_poll();
+        waited += take_counts(proc);
     }
     return (int64_t)(waited / (TIMER_HZ / 1000u));
 }
@@ -141,6 +158,15 @@ int64_t syscall_dispatch(struct process *proc, struct trapframe *frame)
     if (proc == NULL || frame == NULL) {
         refused++;
         return SYS_EBADCALL;
+    }
+
+    /* Every call is a chance to notice a program that will not stop. Charged
+     * before the call rather than after, so that a call which does not return,
+     * like exit, has still paid for the time it took to get here. */
+    take_counts(proc);
+    if (proc->ran_counts > (uint64_t)PROC_SECONDS_MAX * TIMER_HZ) {
+        log_named_dec("process:   seconds run", proc->ran_counts / TIMER_HZ);
+        process_stop(proc, -2, "it ran for longer than any program here should");
     }
 
     switch (frame->rax) {
@@ -185,9 +211,13 @@ int64_t syscall_dispatch(struct process *proc, struct trapframe *frame)
         served++;
         return winsys_close(proc);
 
+    case SYS_WIN_EVENT:
+        served++;
+        return winsys_event(proc, frame->rdi);
+
     case SYS_HOLD:
         served++;
-        return do_hold(frame->rdi);
+        return do_hold(proc, frame->rdi);
 
     default:
         /* An unknown number is refused and the program carries on, so it can

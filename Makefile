@@ -276,7 +276,7 @@ $(LIMINE_TOOL): | $(LIMINE_DIR)
 # Two images, one per firmware, was the alternative. One image is better for the
 # same reason one log is: two of them is two answers to what ME OS is, and the
 # one that gets tested is not necessarily the one that gets booted.
-$(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(BUILD)/paint.elf \
+$(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(BUILD)/paint.elf $(BUILD)/draw.elf $(BUILD)/spin.elf \
         $(LIMINE_TOOL) | $(LIMINE_DIR)
 	@command -v $(XORRISO) >/dev/null 2>&1 || { \
 		echo "missing $(XORRISO), needed to build the ISO. Run make check-tools." >&2; exit 1; }
@@ -286,6 +286,8 @@ $(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(BUILD)/paint.elf \
 	cp $(KERNEL) $(ISO_ROOT)/boot/kernel.elf
 	cp $(BUILD)/hello.elf $(ISO_ROOT)/boot/bin/hello
 	cp $(BUILD)/paint.elf $(ISO_ROOT)/boot/bin/paint
+	cp $(BUILD)/draw.elf $(ISO_ROOT)/boot/bin/draw
+	cp $(BUILD)/spin.elf $(ISO_ROOT)/boot/bin/spin
 	cp limine.conf $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/

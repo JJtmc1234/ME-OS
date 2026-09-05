@@ -26,6 +26,35 @@
 #define SYS_WIN_FLUSH 13
 #define SYS_WIN_CLOSE 14
 #define SYS_HOLD      15
+#define SYS_WIN_EVENT 16
+
+/* What an event is. */
+#define EV_NONE    0
+#define EV_KEY     1
+#define EV_POINTER 2
+
+/* Named keys, above every character so one comparison tells them apart. */
+#define KEY_ESCAPE    0x100
+#define KEY_ENTER     0x101
+#define KEY_BACKSPACE 0x102
+#define KEY_TAB       0x103
+#define KEY_UP        0x104
+#define KEY_DOWN      0x105
+#define KEY_LEFT      0x106
+#define KEY_RIGHT     0x107
+#define KEY_PAGEUP    0x108
+#define KEY_PAGEDOWN  0x109
+
+/* Exactly the shape the kernel copies out. Fixed widths and fixed order,
+ * because this is an agreement between two programs that share no header. */
+struct event {
+    unsigned int kind;
+    unsigned int key;
+    int x;
+    int y;
+    unsigned int buttons;
+    unsigned int reserved;
+};
 
 #define STDOUT 1
 
@@ -91,6 +120,14 @@ static inline long win_close(void) { return sys0(SYS_WIN_CLOSE); }
  * wait: nothing else runs while it happens, because there is no scheduler yet.
  * Capped by the kernel at five seconds. */
 static inline long hold_ms(long milliseconds) { return sys1(SYS_HOLD, milliseconds); }
+
+/* Reads one event. 1 when it wrote one, 0 when nothing was waiting.
+ *
+ * Nothing else on the machine reads the keyboard or the mouse while a program
+ * runs, so a program that stops asking stops the machine's input with it. The
+ * kernel stops a program that runs too long, but only when it makes a call, so
+ * a loop that asks for events is safe and a loop that does not is not. */
+static inline long win_event(struct event *into) { return sys1(SYS_WIN_EVENT, (long)into); }
 
 #define RGB(r, g, b) (((long)(r) << 16) | ((long)(g) << 8) | (long)(b))
 
