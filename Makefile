@@ -223,6 +223,22 @@ check-fp-isolation: $(OBJS)
 # ever disagree the program is entered at the wrong address.
 USER_LOAD_AT := 0x400000
 
+# Programs written in C. No library, no runtime, no startup code: _start is the
+# first instruction. The same flags the kernel uses for the same reasons, minus
+# the ones that are about being a kernel.
+USER_CFLAGS := -std=gnu11 -ffreestanding -nostdinc -Os -g \
+               -Wall -Wextra -Wshadow -Wconversion \
+               -fno-stack-protector -fno-pic -fno-pie \
+               -m64 -march=x86-64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
+               -mno-red-zone -ffile-prefix-map=$(CURDIR)=. \
+               -isystem $(FREESTANDING_INC) -Iuser
+
+$(BUILD)/%.elf: user/%.c user/lib/sys.h
+	@mkdir -p $(BUILD)
+	$(CC) $(USER_CFLAGS) -c $< -o $(BUILD)/$*.elf.o
+	$(LD) -nostdlib -static -n -s --build-id=none -Ttext=$(USER_LOAD_AT) \
+		-e _start $(BUILD)/$*.elf.o -o $@
+
 $(BUILD)/%.elf: user/%.S
 	@mkdir -p $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $(BUILD)/$*.elf.o
@@ -260,7 +276,8 @@ $(LIMINE_TOOL): | $(LIMINE_DIR)
 # Two images, one per firmware, was the alternative. One image is better for the
 # same reason one log is: two of them is two answers to what ME OS is, and the
 # one that gets tested is not necessarily the one that gets booted.
-$(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(LIMINE_TOOL) | $(LIMINE_DIR)
+$(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(BUILD)/paint.elf \
+        $(LIMINE_TOOL) | $(LIMINE_DIR)
 	@command -v $(XORRISO) >/dev/null 2>&1 || { \
 		echo "missing $(XORRISO), needed to build the ISO. Run make check-tools." >&2; exit 1; }
 	@test -f $(LIMINE_DIR)/BOOTX64.EFI || { \
@@ -268,6 +285,7 @@ $(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(LIMINE_TOOL) | $(LIMINE_DIR)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/bin $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL) $(ISO_ROOT)/boot/kernel.elf
 	cp $(BUILD)/hello.elf $(ISO_ROOT)/boot/bin/hello
+	cp $(BUILD)/paint.elf $(ISO_ROOT)/boot/bin/paint
 	cp limine.conf $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/

@@ -38,8 +38,10 @@ static uint32_t rgb(uint8_t r, uint8_t g, uint8_t b)
 static uint32_t arena[POOL_PIXELS];
 static uint32_t screen_pixels[POOL_PIXELS];
 
+/* Five are ME OS's own and the sixth is the slot a program's window goes in,
+ * which is why there is one more of these than the desktop opens at boot. */
 static const char *const NAMES[DESKTOP_MAX_APPS] = {
-    "DEMO", "SYSTEM", "ABOUT", "NOTES", "EDITOR",
+    "DEMO", "SYSTEM", "ABOUT", "NOTES", "EDITOR", "A PROGRAM",
 };
 
 static struct window_manager windows;
@@ -314,6 +316,49 @@ static void test_nonsense_is_refused(void)
           "no arena");
     check(!desktop_init(&empty, &windows, SCREEN_W, SCREEN_H, arena, 0, rgb),
           "an empty arena");
+
+
+    printf("an app can be taken away again, which is what a program needs\n");
+    /* Until M34 every window on this desktop was made once at boot and never
+     * went away, so there was nothing to remove. A program's window has to go
+     * when the program does, or the next program finds the desktop full of the
+     * last one's. */
+    build(DESKTOP_MAX_APPS);
+    check(desktop.app_count == DESKTOP_MAX_APPS, "the desktop is full");
+    check(desktop_add(&desktop, "NO ROOM") == DESKTOP_MAX_APPS,
+          "so nothing else fits");
+
+    const WindowId leaving = desktop_app_at(&desktop, 2)->id;
+    const WindowId after = desktop_app_at(&desktop, 3)->id;
+    check(desktop_remove(&desktop, leaving), "one in the middle is removed");
+    check(desktop.app_count == DESKTOP_MAX_APPS - 1, "and the count drops");
+    check(desktop_index_of(&desktop, leaving) == DESKTOP_MAX_APPS,
+          "it can no longer be found");
+    check(desktop_app_at(&desktop, 2)->id == after,
+          "the ones after it moved down rather than leaving a hole");
+    check(desktop_relayout(&desktop), "and the layout still works");
+
+    check(!desktop_remove(&desktop, leaving), "removing it twice is refused");
+    check(!desktop_remove(&desktop, WINDOW_ID_NONE), "so is removing nothing");
+    check(desktop.app_count == DESKTOP_MAX_APPS - 1, "neither changed the count");
+
+    check(desktop_add(&desktop, "A PROGRAM") == DESKTOP_MAX_APPS - 1,
+          "and the freed slot can be used again");
+    check(desktop_relayout(&desktop), "with a working layout");
+
+    /* Every one of them, so nothing depends on which slot was taken. */
+    build(DESKTOP_MAX_APPS);
+    for (size_t i = DESKTOP_MAX_APPS; i > 0; i--) {
+        check(desktop_remove(&desktop, desktop_app_at(&desktop, i - 1)->id),
+              "each one is removed in turn");
+    }
+    check(desktop.app_count == 0, "and the desktop ends up empty");
+
+    build(DESKTOP_MAX_APPS);
+    const WindowId first = desktop_app_at(&desktop, 0)->id;
+    check(desktop_remove(&desktop, first), "the first one is removed");
+    check(desktop_app_at(&desktop, 0)->id != first, "and something else is first now");
+    check(desktop_relayout(&desktop), "with a working layout");
 
     build(DESKTOP_MAX_APPS);
     check(desktop_add(&desktop, "ONE TOO MANY") == DESKTOP_MAX_APPS,

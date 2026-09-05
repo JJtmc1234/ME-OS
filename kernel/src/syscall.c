@@ -10,7 +10,9 @@
 
 #include "log.h"
 #include "process.h"
+#include "timer.h"
 #include "uaccess.h"
+#include "winsys.h"
 
 void proc_leave_user(struct process *proc);
 
@@ -26,6 +28,12 @@ const char *syscall_name(uint64_t number)
     case SYS_EXIT:   return "exit";
     case SYS_WRITE:  return "write";
     case SYS_GETPID: return "getpid";
+    case SYS_WIN_OPEN:  return "win_open";
+    case SYS_WIN_FILL:  return "win_fill";
+    case SYS_WIN_TEXT:  return "win_text";
+    case SYS_WIN_FLUSH: return "win_flush";
+    case SYS_WIN_CLOSE: return "win_close";
+    case SYS_HOLD:      return "hold";
     default:         return "unknown";
     }
 }
@@ -69,6 +77,42 @@ static int64_t do_write(struct process *proc, struct trapframe *frame)
     }
     proc->bytes_written += bytes;
     return (int64_t)bytes;
+}
+
+/* hold(ticks), so a program can be looked at.
+ *
+ * The timer counts down and wraps about eighteen times a second, and reading
+ * it reports how long since the last read, which means reading consumes the
+ * answer. The desktop reads it once a frame to move things at a rate rather
+ * than at whatever speed the loop runs, so a program that could also read it
+ * would take ticks the desktop never sees.
+ *
+ * That is not a problem here only because there is no scheduler: while a
+ * program runs, the main loop is stopped inside it and is not asking. The
+ * ticks consumed here are ticks nothing else wanted. The moment two things can
+ * run at once this has to become a real wait against a counter that
+ * accumulates, and the milestone that adds a timer interrupt is where that
+ * happens.
+ *
+ * Bounded, because with interrupts off nothing can interrupt this. A program
+ * that asked to wait forever would be a program that stopped the machine. */
+static int64_t do_hold(uint64_t milliseconds)
+{
+    if (milliseconds > SYS_HOLD_MAX_MS) {
+        milliseconds = SYS_HOLD_MAX_MS;
+    }
+    /* The counter runs at TIMER_HZ, so a millisecond is that many counts over
+     * a thousand. Worked out this way round rather than as a constant per
+     * millisecond, because 1193182 does not divide by 1000 and rounding it to
+     * 1193 would lose half a percent, which over five seconds is 25
+     * milliseconds nobody would ever notice but which would be wrong for no
+     * reason. */
+    const uint64_t want = (milliseconds * TIMER_HZ) / 1000u;
+    uint64_t waited = 0;
+    while (waited < want) {
+        waited += timer_poll();
+    }
+    return (int64_t)(waited / (TIMER_HZ / 1000u));
 }
 
 /* exit(code). Does not return. */
@@ -118,6 +162,32 @@ int64_t syscall_dispatch(struct process *proc, struct trapframe *frame)
     case SYS_GETPID:
         served++;
         return (int64_t)proc->pid;
+
+    case SYS_WIN_OPEN:
+        served++;
+        return winsys_open(proc, frame->rdi);
+
+    case SYS_WIN_FILL:
+        served++;
+        return winsys_fill(proc, frame->rdi, frame->rsi, frame->rdx,
+                           frame->r10, frame->r8);
+
+    case SYS_WIN_TEXT:
+        served++;
+        return winsys_text(proc, frame->rdi, frame->rsi, frame->rdx,
+                           frame->r10, frame->r8);
+
+    case SYS_WIN_FLUSH:
+        served++;
+        return winsys_flush(proc);
+
+    case SYS_WIN_CLOSE:
+        served++;
+        return winsys_close(proc);
+
+    case SYS_HOLD:
+        served++;
+        return do_hold(frame->rdi);
 
     default:
         /* An unknown number is refused and the program carries on, so it can

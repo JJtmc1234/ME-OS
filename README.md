@@ -51,8 +51,9 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M31 descriptor tables and traps | User segments, a trap stack, and a fault that is handled instead of resetting | Verified software milestone, QEMU |
 | M32 user mode and system calls | A program runs at privilege three in its own address space, and a broken one costs only itself | Verified software milestone, QEMU |
 | M33 ELF executables | A program that is a file on the disk, not part of the kernel, is read, mapped and run | Verified software milestone, QEMU |
+| M34 windows for programs | A program opens a window of its own and draws in it, instead of printing into a terminal | Verified software milestone, QEMU |
 
-All thirty three finished milestones are checked automatically. `make test` boots
+All thirty four finished milestones are checked automatically. `make test` boots
 the image headlessly, types at it, moves the mouse, opens and closes windows,
 and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
 runs twenty five programs on the development machine with no emulator, covering

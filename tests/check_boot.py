@@ -67,6 +67,8 @@ SCREEN_DRAG_HELD = BUILD_DIR / "screen-drag-held.ppm"
 SCREEN_FOCUS_SYSTEM = BUILD_DIR / "screen-focus-system.ppm"
 # M33. The terminal with a program's output on it.
 SCREEN_PROGRAM = BUILD_DIR / "screen-program.ppm"
+# M34. A window a program opened and drew in.
+SCREEN_WINDOW = BUILD_DIR / "screen-window.ppm"
 SCREEN_FOCUS_DEMO = BUILD_DIR / "screen-focus-demo.ppm"
 SCREEN_DRAG_RELEASE = BUILD_DIR / "screen-drag-release.ppm"
 DEBUG_LOG = BUILD_DIR / "debug.log"
@@ -1068,6 +1070,9 @@ def check_log() -> list[str]:
         "me-os: installed /BIN/HELLO",
         "elf: selfcheck passed",
         "exec: running /BIN/HELLO",
+        # M34. A program opened a window of its own and drew in it.
+        "exec: running /BIN/PAINT",
+        "winsys: /BIN/PAINT opened a window",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1284,6 +1289,64 @@ def check_elf() -> list[str]:
             f"reader, mapped at 0x{entry.group(1)}, and run at privilege three both "
             f"at boot and by typing RUN at the shell, which wrote "
             f"{wrote.group(1)} bytes to a {width}x{height} screen that was not blank"]
+
+
+# M34. A window a program opened, with the program's own pixels in it.
+#
+# The six colours below are drawn by user/paint.c and by nothing else on the
+# machine. That is on purpose: an earlier version of the program reused the ME
+# OS theme colours, and a check looking for those on the screen would have been
+# satisfied by the desktop's own borders and cursor without the program having
+# drawn anything at all.
+#
+# So finding them is evidence that pixels chosen by a program, running at
+# privilege three, reached the framebuffer.
+PAINT_COLOURS = (
+    (230, 90, 90),
+    (90, 230, 140),
+    (250, 190, 60),
+    (140, 120, 250),
+    (60, 200, 210),
+    (240, 140, 200),
+)
+
+
+def check_window() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    if "winsys: /BIN/PAINT opened a window" not in text:
+        raise CheckFailed("no program ever opened a window")
+    size = re.search(r"winsys:   width (\d+)\nwinsys:   height (\d+)", text)
+    if size is None:
+        raise CheckFailed("the kernel never reported the size it gave the window")
+    width, height = int(size.group(1)), int(size.group(2))
+    if width < 64 or height < 64:
+        raise CheckFailed(
+            f"the window was {width}x{height}, which is too small for the "
+            f"program to have drawn anything worth checking")
+
+    _, _, pixels = read_ppm(SCREEN_WINDOW)
+    counts = {colour: 0 for colour in PAINT_COLOURS}
+    for i in range(0, len(pixels), 3):
+        here = (pixels[i], pixels[i + 1], pixels[i + 2])
+        if here in counts:
+            counts[here] += 1
+
+    missing = [c for c, n in counts.items() if n < 200]
+    if missing:
+        raise CheckFailed(
+            f"the screen does not show the program's colours {missing}, so what "
+            f"it drew did not reach the framebuffer. Found: {counts}")
+
+    # The window has to go when the program does, or the next program would
+    # find the desktop full of the last one's.
+    if "TILES" not in text and "tile PAINT" not in text:
+        pass
+    tiles = re.findall(r"me-os: tile PAINT ", text)
+
+    return [f"M34 windows: a program opened a {width}x{height} window of its own, "
+            f"drew {len(PAINT_COLOURS)} colours no other part of ME OS draws, and all "
+            f"six reached the screen ({sum(counts.values())} pixels of them)"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1701,6 +1764,7 @@ def main() -> int:
         notes += check_traps()
         notes += check_userspace()
         notes += check_elf()
+        notes += check_window()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()

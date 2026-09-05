@@ -23,7 +23,16 @@
 #include "tile.h"
 #include "window.h"
 
-#define DESKTOP_MAX_APPS 5
+/* Five belong to ME OS. The sixth is for a program, which may open one window
+ * while it runs. Made room for at M34: before that no window on this desktop
+ * was ever created by anything other than the kernel itself. */
+#define DESKTOP_MAX_APPS 6
+
+/* The five ME OS itself opens at boot and never closes. The difference between
+ * this and the maximum is the room a program's window goes in, and the two are
+ * separate numbers because a loop that opened "as many windows as fit" would
+ * open the program's one too. */
+#define DESKTOP_BUILTIN_APPS 5
 /* How many sets of tiles there are. Four, because that is as many as anybody
  * keeps in their head, and because the keyboard has to reach each one with a
  * single key. */
@@ -78,6 +87,14 @@ bool desktop_init(struct desktop *desktop, struct window_manager *windows,
 /* Adds an app. It gets its pixels from the shared arena at every layout.
  * Returns DESKTOP_MAX_APPS on failure. */
 size_t desktop_add(struct desktop *desktop, const char *title);
+
+/* Takes an app away again and closes its window. The caller relays out.
+ *
+ * The counterpart to desktop_add, and it did not exist until M34 because until
+ * then every window on this desktop was made once at boot and never went away.
+ * A program's window has to go when the program does, or the next program
+ * would find the desktop full of the last one's. */
+bool desktop_remove(struct desktop *desktop, WindowId id);
 
 size_t desktop_index_of(const struct desktop *desktop, WindowId id);
 struct desktop_app *desktop_app_at(struct desktop *desktop, size_t index);

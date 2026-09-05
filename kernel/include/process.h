@@ -75,6 +75,15 @@ struct process {
 
     uint64_t syscalls;
     uint64_t bytes_written;
+
+    /* The one window this program has, or zero. A WindowId, kept as a plain
+     * number so that process.h does not have to pull in the whole window and
+     * surface stack to say that a program might have one. Added at M34. */
+    uint32_t window_id;
+    /* The title, held here rather than in the program's memory, because the
+     * desktop keeps the pointer for as long as the window exists and a program
+     * that overwrote its own string would change what the taskbar says. */
+    char window_title[PROC_NAME_MAX];
 };
 
 /* Installs the trap handler that makes a fault in a program survivable, and

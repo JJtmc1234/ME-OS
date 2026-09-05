@@ -112,6 +112,8 @@ SHOT_RESTART="${SHOT_RESTART:-$BUILD_DIR/screen-restart.ppm}"
 SHOT_SCROLLBACK="${SHOT_SCROLLBACK:-$BUILD_DIR/screen-scrollback.ppm}"
 # M33. The terminal with a program's output on it.
 SHOT_PROGRAM="${SHOT_PROGRAM:-$BUILD_DIR/screen-program.ppm}"
+# M34. A window a program opened and drew in.
+SHOT_WINDOW="${SHOT_WINDOW:-$BUILD_DIR/screen-window.ppm}"
 SERIAL_LOG="$BUILD_DIR/serial.log"
 QEMU="${QEMU:-qemu-system-x86_64}"
 # Seconds to let OVMF and Limine finish before grabbing the screen.
@@ -508,6 +510,21 @@ rectangle_centre() {
     sleep 0.4
     echo "screendump $SHOT_PROGRAM"
     sleep 0.6
+    # M34. The same RUN again, on a program that opens a window instead of
+    # printing. It draws, puts it on the screen, and waits about two seconds so
+    # there is something to photograph. The screenshot is taken while it is
+    # still running, because the window goes when the program does.
+    #
+    # Nothing else on the machine moves during that wait. There is no scheduler
+    # yet, so the shell is stopped inside the program, which is why the wait has
+    # to be long enough to catch and short enough to end.
+    type_line "run /bin/paint"
+    sleep 0.9
+    echo "screendump $SHOT_WINDOW"
+    # Long enough for the hold to finish and the window to close, before
+    # anything else is typed. Keys pressed while a program runs are pressed at a
+    # machine that is not reading the keyboard.
+    sleep 3
     type_line "ps"
     type_line "ls"
     type_line "help"
@@ -574,6 +591,7 @@ echo "boot-capture: restarting with the same disk to see what survived"
 [ -s "$SHOT_RESTART" ] || fail "QEMU produced no screenshot at $SHOT_RESTART"
 [ -s "$SHOT_SCROLLBACK" ] || fail "QEMU produced no screenshot at $SHOT_SCROLLBACK"
 [ -s "$SHOT_PROGRAM" ] || fail "QEMU produced no screenshot at $SHOT_PROGRAM"
+[ -s "$SHOT_WINDOW" ] || fail "QEMU produced no screenshot at $SHOT_WINDOW"
 
 [ -s "$SHOT_BOOT" ] || fail "QEMU produced no screenshot at $SHOT_BOOT"
 [ -s "$SHOT_KEY" ] || fail "QEMU produced no screenshot at $SHOT_KEY"

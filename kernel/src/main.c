@@ -61,6 +61,7 @@
 #include "trap.h"
 #include "vars.h"
 #include "window.h"
+#include "winsys.h"
 
 #define M1_MESSAGE  "IF YOU SEE THIS IT WORKED"
 #define M2_PROMPT   "PRESS A KEY"
@@ -1982,10 +1983,10 @@ void kmain(void)
         fail("could not start the ME OS desktop");
     }
 
-    static const char *const titles[DESKTOP_MAX_APPS] = {
+    static const char *const titles[DESKTOP_BUILTIN_APPS] = {
         "DEMO", "SYSTEM INFO", "ABOUT ME OS", "TERMINAL", "EDITOR",
     };
-    for (size_t i = 0; i < DESKTOP_MAX_APPS; i++) {
+    for (size_t i = 0; i < DESKTOP_BUILTIN_APPS; i++) {
         if (desktop_add(&desktop, titles[i]) != i) {
             fail("could not create the M18 windows");
         }
@@ -2045,7 +2046,6 @@ void kmain(void)
             log_str(vfs_get(&filesystem, child)->name);
         }
         log_str("\n");
-        log_largest_file();
         /* Where the last session was standing is not saved, so start somewhere
          * that is certainly there. */
         if (vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
@@ -2086,7 +2086,6 @@ void kmain(void)
             vfs_chdir(&filesystem, "/HOME") != VFS_OK) {
             fail("could not lay out the filesystem");
         }
-        log_largest_file();
         /* Onto the disk straight away, so a fresh machine has a filesystem on
          * it rather than one that only appears after the first command. */
         save_the_filesystem();
@@ -2097,6 +2096,14 @@ void kmain(void)
      * leaves them alone. */
     install_modules();
     save_the_filesystem();
+
+    /* After the programs are in, not before. This line is what the boot test
+     * compares across a restart to prove a file made of several blocks came
+     * back whole, so it has to describe the filesystem as it finally is. A
+     * fresh disk that logged this before installing anything and a restarted
+     * one that logged it after would disagree about which file is largest and
+     * the check would read that as the disk having lost something. */
+    log_largest_file();
 
     /* M33's proof, and the reason the milestone exists. The bytes below came
      * off the filesystem, having arrived on the disc as their own file. The
@@ -2167,6 +2174,19 @@ void kmain(void)
     relayout_desktop();
     log_stage("M14 compositor ready with tiled window surfaces");
     log_stage("M18 ME OS Default desktop ready, tiling first");
+
+    /* M34. What a program needs to have a window: the desktop to put it on,
+     * the relayout that resizes everything else around it, and the compositor
+     * that puts the result on the screen. Handed over rather than reached for,
+     * because none of those belong inside a system call handler. */
+    {
+        static const struct winsys_hooks hooks = {
+            .desktop = &desktop,
+            .relayout = relayout_desktop,
+            .present = present_desktop,
+        };
+        winsys_attach(&hooks);
+    }
 
     kbd_init();
     log_stage("keyboard ready, waiting for keys");

@@ -48,6 +48,25 @@ size_t desktop_add(struct desktop *desktop, const char *title)
     return index;
 }
 
+bool desktop_remove(struct desktop *desktop, WindowId id)
+{
+    const size_t index = desktop_index_of(desktop, id);
+    if (index >= desktop->app_count) {
+        return false;
+    }
+    window_destroy(desktop->windows, id);
+
+    /* The array is compacted rather than leaving a hole, because every other
+     * function here walks it from zero to app_count and a hole would mean
+     * teaching all of them what an empty slot looks like. Moving the later
+     * entries down is a handful of copies and happens when a program exits. */
+    for (size_t i = index; i + 1 < desktop->app_count; i++) {
+        desktop->apps[i] = desktop->apps[i + 1];
+    }
+    desktop->app_count--;
+    return true;
+}
+
 size_t desktop_index_of(const struct desktop *desktop, WindowId id)
 {
     if (desktop == NULL) {

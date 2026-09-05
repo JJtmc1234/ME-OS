@@ -12,6 +12,7 @@
 #include "pmmboot.h"
 #include "syscall.h"
 #include "vmmboot.h"
+#include "winsys.h"
 
 /* procenter.S reads these three fields by offset, because assembly has no way
  * to know what a C structure looks like. If a field is ever added above them
@@ -217,6 +218,12 @@ bool process_run(struct process *proc)
     /* Back, by way of proc_leave_user, from either an exit or a fault. */
     vmm_activate(&kernel_was);
     current = NULL;
+
+    /* A window belonging to a program that is no longer running is a window
+     * nobody can close. Released here rather than in the exit call, so that a
+     * program which faulted loses its window on exactly the same path as one
+     * that ended properly. */
+    winsys_release(proc);
     if (proc->state == PROC_RUNNING) {
         proc->state = PROC_EXITED;
     }

@@ -50,6 +50,7 @@ Nothing here has been booted on a physical machine yet.
 | M31 | Descriptor tables and traps | The kernel's own segment table with user segments and a trap stack, and 256 interrupt vectors, proved by taking a fault and returning from it | Verified software milestone |
 | M32 | User mode, processes and system calls | A program runs at privilege three in its own address space, writes through a system call, and exits, and a broken one is stopped without taking the machine | Verified software milestone |
 | M33 | ELF executables | A program that is a file on the disk, not part of the kernel, is read, checked, mapped and run by typing RUN | Verified software milestone |
+| M34 | Windows for programs | A program opens a window of its own, draws in it, and the window goes when the program does | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1332,6 +1333,102 @@ program at a time. `PS` exists and says so honestly: with no scheduler a
 program only exists while the shell is inside it, and the shell cannot be
 running `PS` at the same moment.
 
+## M34 windows for programs, so the screen stops being the terminal
+
+Done. A program opens a window of its own, fills it, draws bars and text, puts
+it on the screen and waits to be looked at. When it exits the window goes with
+it and the desktop lays itself out again.
+
+**What was wrong with the machine before this.** Everything a program could do
+to a screen was print a line of text into somebody else's terminal. Every
+window on the desktop had been made by the kernel at boot and none of them had
+ever gone away. That is a machine that runs commands, and a browser, an editor
+and a game all need the other thing.
+
+**A program does not choose its size.** ME OS has been tiling first since M18,
+and the desktop has always said an app is given a tile rather than asking for
+one. So opening a window returns the size it was given, width in the top half
+of the register and height in the bottom, and a program that wants to know how
+much room it has finds out afterwards. Passing in a width and a height would be
+inventing a negotiation this desktop does not have.
+
+That is not decoration. The first version of the test program spaced its bars a
+fixed distance apart, the last bar fell below the bottom of the window and was
+clipped away, and the check caught it as a missing colour. The program now
+works its layout out from the number it was given, which is the whole reason
+the call returns one.
+
+**One window per program, and therefore no window handle.** Not because more is
+hard, but because one is enough to answer whether a program can draw at all,
+and a limit that is obviously too small is easier to raise later than one that
+is nearly right is to reason about now. Since a program has exactly one, no
+call takes a handle, and a program cannot name another program's window because
+there is no way to name a window.
+
+**Nothing checks a coordinate here.** Every drawing call goes through the
+surface layer, which has clipped at both ends since M14 and is tested for it.
+A rectangle reaching outside a window draws the part that is inside and nothing
+else. That is a stronger guarantee than a check in the system call would be,
+because it is the same clip the compositor already depends on, so it cannot
+quietly disagree with it. The test program deliberately draws a bar that hangs
+off the right edge, and the screenshot shows it cut off.
+
+**The window goes when the program does, however it went.** Released on the way
+out of `process_run`, not in the exit call, so a program that faulted loses its
+window on exactly the same path as one that ended properly. A window belonging
+to a program that is no longer running is a window nobody can close.
+
+**Everything else is repainted, because nothing else is running.** Adding or
+removing a window resizes every other tile. With no scheduler the main loop is
+stopped inside the program, so nothing else is going to repaint them, and the
+window system asks for a full relayout rather than leaving five blank rectangles
+on the screen.
+
+**The wait is honest rather than useful.** A program needs to stay on the screen
+long enough to be seen, and there is nothing else for the machine to do while
+it does, so `hold` spins. It takes milliseconds and is capped at five seconds,
+because with interrupts off nothing can interrupt a wait and a program asking to
+wait forever would be a program that stopped the machine.
+
+It took counts of the timer at first, which was wrong in a way that looked
+right: the counter runs at 1.19 MHz, so a program asking to wait for 36 got
+thirty microseconds and the window it drew was gone before the screenshot was
+taken. A unit a person can reason about is worth the multiply.
+
+**Programs are written in C now.** M32 and M33 were assembly, because assembly
+needs nothing underneath it. This needs nothing underneath it either: no C
+library, no runtime, no startup code, `_start` is the first instruction. What
+`user/lib/sys.h` adds is the wrappers that turn a function call into `int 0x80`
+and nothing else. It deliberately repeats the call numbers rather than
+including the kernel's header, because a program compiled against a kernel
+header is a program coupled to the kernel, which is what the last two
+milestones were spent removing.
+
+**The system call ABI grew to six arguments**, in rdi, rsi, rdx, r10, r8 and r9.
+The fourth is r10 rather than rcx, where the C convention would put it, because
+the `syscall` instruction destroys rcx and a kernel reading the fourth argument
+from rcx would have to change its whole ABI the day it stopped using
+`int 0x80`. Linux chose r10 for the same reason. The cost is a two instruction
+shuffle in the user side wrapper.
+
+**How it is proved.** The desktop can now remove an app as well as add one, and
+that is where the host tests went: removing one from the middle and checking
+the ones after it moved down rather than leaving a hole, removing every one in
+turn, removing the first, removing one twice, and reusing a freed slot.
+
+On the real machine the boot test types `RUN /BIN/PAINT`, screenshots while the
+program is still running, and counts pixels of the six colours the program
+draws. Those six are deliberately none of the six the ME OS theme uses: the
+first version of the program reused them, and a check looking for those on the
+screen would have been satisfied by the desktop's own borders and cursor
+without the program having drawn anything at all.
+
+**What it does not do.** No input. A program cannot see a key press or a mouse
+click, which is M35 and is what makes a window something you can use rather
+than something you can look at. No second window, no resizing, no images, no
+drawing a single pixel, and no way for a program to know its window was
+covered, because on a tiling desktop it cannot be.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1343,7 +1440,7 @@ running `PS` at the same moment.
 
 ## Verification status
 
-M1 to M33 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M34 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 

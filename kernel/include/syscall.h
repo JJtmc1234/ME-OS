@@ -34,12 +34,55 @@
  * whole table reachable from user mode. */
 #define SYSCALL_VECTOR 0x80
 
-/* rax holds the number. rdi, rsi and rdx hold the arguments, which is the
- * front of the ordinary calling convention, so a program written in C needs no
- * shuffling to make one. */
+/* rax holds the number. The arguments are in rdi, rsi, rdx, r10, r8 and r9.
+ *
+ * The first three are the front of the ordinary calling convention, so a
+ * program written in C needs no shuffling to make a call with up to three
+ * arguments. The fourth is r10 rather than rcx, which is where the C
+ * convention would put it, and that is deliberate: the `syscall` instruction
+ * destroys rcx on entry, so a kernel that read the fourth argument from rcx
+ * would have to change its whole ABI the day it moved off `int 0x80`. Linux
+ * chose r10 for exactly this reason and this follows it, which costs a two
+ * instruction shuffle in the user side wrapper and nothing else.
+ *
+ * Six because that is what the window calls need and the registers run out
+ * there anyway. A call wanting more takes a pointer to a structure. */
+#define SYS_ARG_MAX 6
+
 #define SYS_EXIT   0
 #define SYS_WRITE  1
 #define SYS_GETPID 2
+
+/* The window calls, added at M34.
+ *
+ * A program gets one window. Not because more is hard, but because one is
+ * enough to answer whether a program can draw at all, and a limit that is
+ * obviously too small is easier to raise later than a limit that is nearly
+ * right is to reason about now. */
+#define SYS_WIN_OPEN  10
+#define SYS_WIN_FILL  11
+#define SYS_WIN_TEXT  12
+#define SYS_WIN_FLUSH 13
+#define SYS_WIN_CLOSE 14
+
+/* Waits, so a program can be looked at. Takes milliseconds.
+ *
+ * There is no scheduler, so the shell is stopped inside the program while it
+ * runs and nothing else on the machine moves. That makes this honest rather
+ * than useful: it is how a program stays on the screen long enough to be seen,
+ * and it will become a real wait once there is something else to run.
+ *
+ * Milliseconds rather than the timer's own counts, which is what the first
+ * version took and was wrong in a way that looked right. The counter runs at
+ * 1.19 MHz, so a program asking to wait "36" got thirty microseconds and the
+ * window it drew was gone before the screenshot. A unit a person can reason
+ * about is worth the multiply. */
+#define SYS_HOLD 15
+
+/* Five seconds. A program that asked to wait forever would be a program that
+ * stopped the machine, because with interrupts off nothing can interrupt a
+ * wait. */
+#define SYS_HOLD_MAX_MS 5000
 
 /* Deliberately no call for the time.
  *
@@ -59,6 +102,12 @@
 #define SYS_EFAULT    (-2)
 #define SYS_EBADFD    (-3)
 #define SYS_ETOOBIG   (-4)
+/* No window, or not this program's window. */
+#define SYS_ENOWINDOW (-5)
+/* A size or a coordinate that is not usable. */
+#define SYS_EBADSIZE  (-6)
+/* The desktop has no room for another window. */
+#define SYS_ENOROOM   (-7)
 
 /* The only file a program can write to at M32. There is no descriptor table
  * yet, so this is a number that means the terminal rather than an index into
