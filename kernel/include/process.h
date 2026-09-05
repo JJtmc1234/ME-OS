@@ -93,6 +93,16 @@ struct process *process_create(const char *name, struct cmd_out *out);
 bool process_add_page(struct process *proc, uint64_t virt, uint64_t flags,
                       const void *contents, uint64_t bytes);
 
+/* The same, filling from `into` bytes inside the page rather than the start.
+ *
+ * The ELF loader needs this because a segment does not begin on a page
+ * boundary. It also tolerates the page already being mapped, and fills the
+ * existing one instead of failing, because two segments may share the page at
+ * their ends: the file's own rule is that segments do not overlap by byte, not
+ * that they do not share a page. */
+bool process_add_page_at(struct process *proc, uint64_t virt, uint64_t flags,
+                         const void *contents, uint64_t bytes, uint64_t into);
+
 /* Runs it until it exits or faults, and returns when the kernel has it back.
  *
  * This blocks. There is no scheduler yet, so the shell that started a program

@@ -1,10 +1,13 @@
-/* The two test programs, as bytes inside the kernel image.
+/* The two broken programs, as bytes inside the kernel image.
  *
- * Only for M32, and deliberately so. This milestone answers whether code can
- * run at privilege three and come back, and embedding the program keeps the
- * filesystem, the loader and the executable format out of the way of that one
- * question. M33 loads a real ELF file off the disk, and the point of that
- * milestone is precisely that the program is no longer in here.
+ * These are fixtures, not programs. One reads a null pointer and one reads the
+ * kernel, and both exist to prove that doing so costs the program and nothing
+ * else. Nobody would put either on a disk, so they stay here.
+ *
+ * The working program used to be here too and is not any more. M33 reads it
+ * off the filesystem, having been given it by the bootloader as a file of its
+ * own, and keeping a second copy inside the kernel would undercut exactly the
+ * claim that milestone makes.
  *
  * `.incbin` rather than a C array of numbers, so what runs is the assembler's
  * output from user/hello.S and nobody has hand copied any bytes.
@@ -14,13 +17,6 @@
     .section .rodata
     .balign 16
 
-    .globl user_hello
-    .globl user_hello_end
-user_hello:
-    .incbin "build/hello.bin"
-user_hello_end:
-
-    .balign 16
     .globl user_peek
     .globl user_peek_end
 user_peek:

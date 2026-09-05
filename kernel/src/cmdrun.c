@@ -13,6 +13,8 @@
  */
 #include "cmd.h"
 
+#include "cmdexec.h"
+#include "elf.h"
 #include "vfs.h"
 
 /* One copy of the script for each depth.
@@ -50,6 +52,14 @@ void cmdrun_script(struct cmd_context *context, const char *path)
         cmd_println(context->out, vfs_explain(found));
         return;
     }
+    /* What kind of file this is, decided by looking at it rather than at its
+     * name. A name is a claim and the first four bytes are evidence, which is
+     * why every Unix does it this way. */
+    if (elf_looks_like_elf((const uint8_t *)text, length)) {
+        cmdexec_program(context, path, (const uint8_t *)text, length);
+        return;
+    }
+
     running++;
 
     char line[TERM_INPUT_MAX];

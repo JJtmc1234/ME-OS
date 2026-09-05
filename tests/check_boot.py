@@ -1062,6 +1062,10 @@ def check_log() -> list[str]:
         "trap: system call gate 0x80",
         "process: user traps are handled",
         "HELLO FROM USERSPACE",
+        # M33. A program read off the filesystem, not out of the kernel.
+        "me-os: installed /BIN/HELLO",
+        "elf: selfcheck passed",
+        "exec: running /BIN/HELLO",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1195,12 +1199,9 @@ def check_traps() -> list[str]:
 def check_userspace() -> list[str]:
     text = SERIAL_LOG.read_text(errors="ignore")
 
-    if "process: selfcheck passed, a program ran at privilege three" not in text:
-        raise CheckFailed("no program ran in user mode")
-    if "HELLO FROM USERSPACE" not in text:
-        raise CheckFailed("the program ran but its output never crossed the system "
-                          "call boundary")
-
+    # That a correct program runs is M33's check, because since M33 the only
+    # working program on the machine is a file rather than something embedded
+    # in the kernel. What is left here is the half that matters more.
     if "a faulting program was stopped and the machine carried on" not in text:
         raise CheckFailed("a program that faults did not stop cleanly, so a broken "
                           "program still costs the whole machine")
@@ -1214,15 +1215,51 @@ def check_userspace() -> list[str]:
         raise CheckFailed("the refusal was not at a kernel address, so it does not "
                           "prove what it claims to")
 
-    calls = re.search(r"process: system calls served (\d+)", text)
-    if calls is None or int(calls.group(1)) < 2:
-        raise CheckFailed("fewer than two system calls were served, so write and "
-                          "exit were not both exercised")
+    return ["M32 user mode: a program that faults at privilege three was stopped "
+            "with the machine still running, and one holding a correct kernel "
+            f"address was refused it at 0x{refused_at.group(1)} because that page "
+            f"carries no user bit"]
 
-    return ["M32 user mode: a program ran at privilege three and its output crossed "
-            "the system call boundary, a second faulted and was stopped with the "
-            f"machine still running, and a third was refused the kernel's memory at "
-            f"0x{refused_at.group(1)}, an address it held correctly"]
+
+# M33. A program that is a file, loaded by the ELF reader and run.
+#
+# This is the one that makes the difference between a machine that can run
+# things built into itself and a machine that can load, isolate and execute a
+# program. The bytes came off the disc as their own file, the kernel copied
+# them into the filesystem, the ELF reader parsed them, the loader mapped the
+# segments, and the program ran at privilege three.
+#
+# The kernel does not contain this program. That is what is being tested, and
+# the way it is tested is that the same executable is read back through the
+# ordinary filesystem path a person would use.
+def check_elf() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    installed = re.search(r"me-os: installed /BIN/HELLO, (\d+) bytes", text)
+    if installed is None:
+        raise CheckFailed("the program was never installed into the filesystem, so "
+                          "the bootloader did not hand it over as a file")
+    size = int(installed.group(1))
+    if size < 64:
+        raise CheckFailed(f"the installed program is {size} bytes, which is smaller "
+                          f"than an ELF header, so it cannot be an executable")
+
+    if "elf: selfcheck passed, a program loaded from a file said: HELLO FROM USERSPACE" not in text:
+        raise CheckFailed("the program on the filesystem did not load and run")
+
+    entry = re.search(r"elfload: entry 0x([0-9A-F]+)", text)
+    if entry is None:
+        raise CheckFailed("the ELF loader never reported an entry point")
+
+    # And the visible half: the same file, run by typing RUN at the shell.
+    if "exec: running /BIN/HELLO" not in text:
+        raise CheckFailed("RUN never dispatched the file as a program, so it was "
+                          "treated as a script instead")
+
+    return [f"M33 ELF: /BIN/HELLO is a {size} byte executable the bootloader carried "
+            f"as its own file, installed into the filesystem, parsed by the ELF "
+            f"reader, mapped at 0x{entry.group(1)}, and run at privilege three both "
+            f"at boot and by typing RUN at the shell"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1639,6 +1676,7 @@ def main() -> int:
         notes += check_vmm()
         notes += check_traps()
         notes += check_userspace()
+        notes += check_elf()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()

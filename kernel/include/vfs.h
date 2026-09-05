@@ -117,6 +117,16 @@ enum vfs_result vfs_create(struct vfs *fs, const char *path);
 enum vfs_result vfs_write(struct vfs *fs, const char *path, const char *text);
 /* Appends rather than replacing, so a file can be built up a line at a time. */
 enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text);
+
+/* The same two, given a length instead of finding one.
+ *
+ * Added at M33, because an executable is full of zero bytes and the length of
+ * one is not where the first of them is. Reading was already safe: vfs_read
+ * copies the node's recorded length and never looks for a terminator. */
+enum vfs_result vfs_write_bytes(struct vfs *fs, const char *path,
+                                const char *data, uint64_t length);
+enum vfs_result vfs_append_bytes(struct vfs *fs, const char *path,
+                                 const char *data, uint64_t length);
 enum vfs_result vfs_read(const struct vfs *fs, const char *path,
                          char *out, uint64_t capacity, uint64_t *length);
 /* Removes a file, or a directory with nothing in it. A directory with contents

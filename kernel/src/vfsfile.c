@@ -46,7 +46,8 @@ enum vfs_result vfs_write(struct vfs *fs, const char *path, const char *text)
     return vfs_append(fs, path, text);
 }
 
-enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
+enum vfs_result vfs_write_bytes(struct vfs *fs, const char *path,
+                                const char *data, uint64_t length)
 {
     if (fs == NULL) {
         return VFS_BAD_NAME;
@@ -56,9 +57,30 @@ enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
     if (found != VFS_OK) {
         return found;
     }
+    vfsblock_release(fs, &fs->nodes[at]);
+    return vfs_append_bytes(fs, path, data, length);
+}
+
+enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
+{
+    /* The length is where the first zero byte is, which is right for text and
+     * wrong for anything else. vfs_append_bytes is for anything else. */
+    return vfs_append_bytes(fs, path, text, vfs_length_of(text));
+}
+
+enum vfs_result vfs_append_bytes(struct vfs *fs, const char *path,
+                                 const char *data, uint64_t adding)
+{
+    if (fs == NULL || data == NULL) {
+        return VFS_BAD_NAME;
+    }
+    int16_t at = VFS_NONE;
+    const enum vfs_result found = file_for_writing(fs, path, &at);
+    if (found != VFS_OK) {
+        return found;
+    }
 
     struct vfs_node *node = &fs->nodes[at];
-    const uint64_t adding = vfs_length_of(text);
     /* Refused rather than cut. A file that quietly holds less than it was given
      * is a file whose contents nobody can trust. */
     if (node->length + adding > VFS_FILE_MAX) {
@@ -75,7 +97,7 @@ enum vfs_result vfs_append(struct vfs *fs, const char *path, const char *text)
         if (byte == NULL) {
             return VFS_NO_SPACE;
         }
-        *byte = text[i];
+        *byte = data[i];
     }
     node->length += (uint32_t)adding;
     fs->changes++;

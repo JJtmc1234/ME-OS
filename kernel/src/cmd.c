@@ -13,6 +13,8 @@
  */
 #include "cmd.h"
 
+#include "cmdexec.h"
+
 #include "cmdinfo.h"
 
 static bool same(const char *a, const char *b)
@@ -100,6 +102,10 @@ static void run_one(struct cmd_context *context, const char *line)
         }
         if (same(name, "RUN")) {
             cmdrun_script(context, rest);
+            return;
+        }
+        if (same(name, "PS")) {
+            cmdexec_ps(context);
             return;
         }
         if (same(name, "TREE")) {

@@ -50,15 +50,16 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M30 address spaces | Page tables the kernel builds itself, and the processor runs on one | Verified software milestone, QEMU |
 | M31 descriptor tables and traps | User segments, a trap stack, and a fault that is handled instead of resetting | Verified software milestone, QEMU |
 | M32 user mode and system calls | A program runs at privilege three in its own address space, and a broken one costs only itself | Verified software milestone, QEMU |
+| M33 ELF executables | A program that is a file on the disk, not part of the kernel, is read, mapped and run | Verified software milestone, QEMU |
 
-All thirty two finished milestones are checked automatically. `make test` boots
+All thirty three finished milestones are checked automatically. `make test` boots
 the image headlessly, types at it, moves the mouse, opens and closes windows,
 and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs twenty four programs on the development machine with no emulator, covering
+runs twenty five programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
 clamping, the tiling layout, the desktop, the terminal and its commands, the
 processor identification, the filesystem on disk, the text editor, the clock, the page
-allocator, the address spaces, the descriptor tables and the user pointer checks. See
+allocator, the address spaces, the descriptor tables, the user pointer checks and the ELF reader. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it
@@ -140,6 +141,12 @@ from.
 
 The filesystem is written to an ATA disk, so what you make is still there the
 next time the machine starts. `DF` reports what is actually on it.
+
+`RUN NAME` runs a file. If it begins with the ELF magic it is a program and is
+loaded into an address space of its own and run at privilege three, and if it
+does not it is a script and its lines are run as commands. `/BIN/HELLO` is a
+real executable that the bootloader carries on the disc as its own file, so it
+is not part of the kernel. `PS` says what is running.
 
 `EDIT NAME` opens a file in the Editor window. Arrows move the cursor, typing
 inserts, Enter splits a line, Backspace at the start of one joins it to the line

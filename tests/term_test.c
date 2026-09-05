@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "cmd.h"
+#include "cmdexec.h"
 #include "term.h"
 #include "termback.h"
 #include "vfs.h"
@@ -872,6 +873,37 @@ static void test_finishing_a_name(void)
     check(cmd_complete(&context, "CAT R", line, 0) == 0, "no room to write");
 }
 
+
+/* Running a program needs page tables, a privilege drop and two files of
+ * assembly, none of which exist on the development machine. So the two exec
+ * entry points are stubbed here and counted, which turns a linking problem into
+ * the test that RUN decides what a file is by looking at it.
+ *
+ * elf.c itself is linked for real, because it is pure and is what does the
+ * deciding. */
+static uint64_t programs_started;
+static char last_program[64];
+
+void cmdexec_program(struct cmd_context *context, const char *name,
+                     const uint8_t *file, uint64_t bytes)
+{
+    (void)context;
+    (void)file;
+    (void)bytes;
+    programs_started++;
+    uint64_t i = 0;
+    while (name != NULL && name[i] != '\0' && i + 1 < sizeof last_program) {
+        last_program[i] = name[i];
+        i++;
+    }
+    last_program[i] = '\0';
+}
+
+void cmdexec_ps(struct cmd_context *context)
+{
+    cmd_println(context->out, "PID  STATE    PROGRAM");
+}
+
 int main(void)
 {
     test_text_lands_where_it_was_put();
@@ -886,6 +918,54 @@ int main(void)
     test_scrollback();
     test_running_a_file_of_commands();
     test_finishing_a_name();
+
+
+    printf("RUN decides what a file is by looking at it, not at its name\n");
+    {
+        /* M33. A name is a claim and the first four bytes are evidence, which
+         * is what every Unix does and why a script cannot be made to run as a
+         * program by calling it one. */
+        struct vfs files;
+        vfs_init(&files);
+        struct term screen;
+        term_init(&screen, 60, 20);
+        struct cmd_out sink;
+        cmd_out_to_term(&sink, &screen);
+        struct cmd_context shell = {
+            .out = &sink, .term = &screen, .fs = &files, .version = "0.33" };
+        char line[TERM_MAX_COLS + 1];
+
+        /* Enough of an ELF header to be recognised as one. What is in it does
+         * not matter here: deciding it is a program is this test's subject,
+         * and whether it is a valid one is elf_test's. */
+        const char program[] = { 0x7F, 'E', 'L', 'F', 2, 1, 1, 0 };
+        vfs_write_bytes(&files, "/A-PROGRAM", program, sizeof program);
+        vfs_write(&files, "/A-SCRIPT", "ECHO FROM A SCRIPT");
+        /* A file whose name looks like a program and whose contents do not. */
+        vfs_write(&files, "/HELLO", "ECHO NOT A PROGRAM");
+
+        uint64_t before = programs_started;
+        cmd_run(&shell, "RUN /A-SCRIPT");
+        check(programs_started == before, "a script is not started as a program");
+        bool echoed = false;
+        for (uint32_t r = 0; r < 20; r++) {
+            if (strcmp(row_of(&screen, r, line), "FROM A SCRIPT") == 0) {
+                echoed = true;
+            }
+        }
+        check(echoed, "and its lines are run as commands");
+
+        cmd_run(&shell, "RUN /A-PROGRAM");
+        check(programs_started == before + 1, "a file beginning with ELF is started as one");
+        check(strcmp(last_program, "/A-PROGRAM") == 0, "and it is handed the right file");
+
+        cmd_run(&shell, "RUN /HELLO");
+        check(programs_started == before + 1,
+              "a file named like a program but holding text is still a script");
+
+        cmd_run(&shell, "RUN /NOT-THERE");
+        check(programs_started == before + 1, "a missing file starts nothing");
+    }
 
     if (failures > 0) {
         printf("\n%d terminal check(s) FAILED\n", failures);

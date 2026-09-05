@@ -146,6 +146,20 @@ static volatile struct limine_hhdm_request hhdm_request = {
     .response = NULL,
 };
 
+/* The programs carried on the disc as their own files.
+ *
+ * Asked for at M33. The point of that milestone is that a program ME OS runs
+ * is not part of ME OS, so the bootloader hands the kernel a file it loaded
+ * from the disc and the kernel puts it into the filesystem. Nothing about the
+ * program is compiled in, and `RUN HELLO` reads it exactly the way it reads
+ * anything else on the disk. */
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST,
+    .revision = 0,
+    .response = NULL,
+};
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile LIMINE_REQUESTS_START_MARKER;
 
@@ -841,6 +855,74 @@ static void read_memory_map(void)
             total_memory_bytes += entry->length;
         }
         memory_regions++;
+    }
+}
+
+
+/* Puts the programs the bootloader loaded into the filesystem.
+ *
+ * They arrive as separate files on the disc, not as part of the kernel, which
+ * is the whole point of M33. Copying them in means `RUN HELLO` reads a program
+ * through exactly the path it reads anything else, and the program persists to
+ * the disk with the rest of the filesystem like any other file.
+ *
+ * Written only when it is not already there, so a disk that survived a restart
+ * keeps whatever is on it rather than being overwritten from the disc on every
+ * boot. */
+static void install_modules(void)
+{
+    const struct limine_module_response *modules = module_request.response;
+    if (modules == NULL || modules->module_count == 0) {
+        log_line("me-os: the bootloader supplied no programs");
+        return;
+    }
+    if (vfs_resolve(&filesystem, "/BIN") == VFS_NONE &&
+        vfs_mkdir(&filesystem, "/BIN") != VFS_OK) {
+        log_line("me-os: could not make /BIN");
+        return;
+    }
+
+    for (uint64_t i = 0; i < modules->module_count; i++) {
+        const struct limine_file *file = modules->modules[i];
+        if (file == NULL || file->address == NULL || file->size == 0) {
+            continue;
+        }
+        /* The last component of the path the disc used, upper cased, because
+         * that is what every name in this filesystem looks like. */
+        const char *path = file->path;
+        const char *leaf = path;
+        for (const char *at = path; at != NULL && *at != '\0'; at++) {
+            if (*at == '/') {
+                leaf = at + 1;
+            }
+        }
+
+        char target[VFS_NAME_MAX + 8];
+        uint64_t written = 0;
+        const char prefix[] = "/BIN/";
+        for (uint64_t j = 0; j < sizeof prefix - 1; j++) {
+            target[written++] = prefix[j];
+        }
+        for (uint64_t j = 0; leaf[j] != '\0' && written + 1 < sizeof target; j++) {
+            char c = leaf[j];
+            target[written++] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        target[written] = '\0';
+
+        if (vfs_resolve(&filesystem, target) != VFS_NONE) {
+            log_str("me-os: ");
+            log_str(target);
+            log_str(" is already on the disk\n");
+            continue;
+        }
+
+        const enum vfs_result done =
+            vfs_write_bytes(&filesystem, target, (const char *)file->address, file->size);
+        log_str("me-os: installed ");
+        log_str(target);
+        log_str(done == VFS_OK ? ", " : " FAILED, ");
+        log_dec(file->size);
+        log_str(" bytes\n");
     }
 }
 
@@ -2008,6 +2090,25 @@ void kmain(void)
         /* Onto the disk straight away, so a fresh machine has a filesystem on
          * it rather than one that only appears after the first command. */
         save_the_filesystem();
+    }
+
+    /* Whichever way the filesystem came to exist, the programs the bootloader
+     * loaded go into it. On a disk that already has them this notices and
+     * leaves them alone. */
+    install_modules();
+    save_the_filesystem();
+
+    /* M33's proof, and the reason the milestone exists. The bytes below came
+     * off the filesystem, having arrived on the disc as their own file. The
+     * kernel does not contain this program. */
+    {
+        static char program[VFS_FILE_MAX + 1];
+        uint64_t length = 0;
+        if (vfs_read(&filesystem, "/BIN/HELLO", program, sizeof program, &length) == VFS_OK) {
+            procboot_run_file("hello", (const uint8_t *)program, length);
+        } else {
+            log_line("elf: selfcheck skipped, there is no /BIN/HELLO on the disk");
+        }
     }
 
     term_init(&terminal, TERM_MAX_COLS, TERM_MAX_ROWS);

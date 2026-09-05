@@ -15,11 +15,11 @@
 #include "cmdout.h"
 #include "log.h"
 #include "process.h"
+#include "elf.h"
+#include "elfload.h"
 #include "syscall.h"
 
 /* Placed in the kernel image by userbin.S, assembled from the sources in the user directory. */
-extern const uint8_t user_hello[];
-extern const uint8_t user_hello_end[];
 extern const uint8_t user_fault[];
 extern const uint8_t user_fault_end[];
 extern const uint8_t user_peek[];
@@ -59,47 +59,61 @@ static struct process *load_blob(const char *name, const uint8_t *from,
     return proc;
 }
 
-void procboot_selfcheck(void)
+bool procboot_run_file(const char *name, const uint8_t *file, uint64_t bytes)
 {
     struct cmd_out out;
     cmd_out_to_buffer(&out, captured, sizeof captured);
 
-    struct process *hello = load_blob("hello", user_hello, user_hello_end, &out);
-    if (hello == NULL) {
-        log_line("process: SELFCHECK FAILED, could not build the first program");
-        return;
+    if (!elf_looks_like_elf(file, bytes)) {
+        log_line("elf: SELFCHECK FAILED, the file on the disk is not an executable");
+        return false;
     }
 
-    uint64_t pid = hello->pid;
-    bool clean = process_run(hello);
-    int64_t code = hello->exit_code;
-    uint64_t calls = hello->syscalls;
-    uint64_t wrote = hello->bytes_written;
-    process_destroy(hello);
+    struct process *proc = process_create(name, &out);
+    if (proc == NULL) {
+        log_line("elf: SELFCHECK FAILED, no room for a process");
+        return false;
+    }
+    enum elf_result loaded = elfload(proc, file, bytes);
+    if (loaded != ELF_OK) {
+        log_str("elf: SELFCHECK FAILED to load, ");
+        log_str(elf_result_text(loaded));
+        log_str("\n");
+        process_destroy(proc);
+        return false;
+    }
+    uint64_t stack_flags = PTE_WRITE | (vmm_nx_available() ? PTE_NX : 0);
+    if (!process_add_page(proc, USER_STACK_TOP - PAGE_SIZE, stack_flags, NULL, 0)) {
+        log_line("elf: SELFCHECK FAILED, no page for a stack");
+        process_destroy(proc);
+        return false;
+    }
+    proc->user_stack = USER_STACK_TOP;
 
-    /* The text the program produced, which reached here through the system
-     * call boundary and a copy that checked every page of it. */
+    bool clean = process_run(proc);
+    int64_t code = proc->exit_code;
+    uint64_t wrote = proc->bytes_written;
+    process_destroy(proc);
+
     const char *said = cmd_out_text(&out);
     bool right_words = said[0] == 'H' && said[1] == 'E' && said[2] == 'L' &&
                        said[3] == 'L' && said[4] == 'O';
 
-    if (clean && code == 0 && calls == 2 && wrote == 21 && right_words) {
-        log_str("process: selfcheck passed, a program ran at privilege three and said: ");
+    if (clean && code == 0 && wrote == 21 && right_words) {
+        log_str("elf: selfcheck passed, a program loaded from a file said: ");
         log_str(said);
-        log_named_dec("process:   pid", pid);
-        log_named_dec("process:   system calls made", calls);
-    } else {
-        log_line("process: SELFCHECK FAILED on the first program");
-        log_named_dec("process:   ran cleanly", clean ? 1u : 0u);
-        log_named_dec("process:   exit code", (uint64_t)code);
-        log_named_dec("process:   system calls", calls);
-        log_named_dec("process:   bytes written", wrote);
-        log_str("process:   said: ");
-        log_str(said);
-        log_str("\n");
-        return;
+        log_named_dec("elf:   bytes of file", bytes);
+        return true;
     }
+    log_line("elf: SELFCHECK FAILED after loading");
+    log_named_dec("elf:   ran cleanly", clean ? 1u : 0u);
+    log_named_dec("elf:   exit code", (uint64_t)code);
+    log_named_dec("elf:   bytes written", wrote);
+    return false;
+}
 
+void procboot_selfcheck(void)
+{
     /* The second claim. This program reads address zero, which is mapped in no
      * address space, so the processor faults. Everything after this line is
      * the proof that the machine is still here. */

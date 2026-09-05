@@ -496,6 +496,14 @@ rectangle_centre() {
 
     type_line "write setup.txt mkdir /made-by-script"
     type_line "run setup.txt"
+    # M33. The same RUN, given a program instead of a script. Nothing says
+    # which it is except the first four bytes of the file, and /BIN/HELLO is an
+    # ELF executable the bootloader carried on the disc as its own file. What
+    # appears on the screen after this was written by code that is not part of
+    # ME OS, running at privilege three, through a system call.
+    type_line "ls /bin"
+    type_line "run /bin/hello"
+    type_line "ps"
     type_line "ls"
     type_line "help"
     echo "sendkey pgup"

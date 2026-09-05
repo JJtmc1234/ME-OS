@@ -223,6 +223,12 @@ check-fp-isolation: $(OBJS)
 # ever disagree the program is entered at the wrong address.
 USER_LOAD_AT := 0x400000
 
+$(BUILD)/%.elf: user/%.S
+	@mkdir -p $(BUILD)
+	$(CC) $(ASFLAGS) -c $< -o $(BUILD)/$*.elf.o
+	$(LD) -nostdlib -static -n -s --build-id=none -Ttext=$(USER_LOAD_AT) \
+		-e _start $(BUILD)/$*.elf.o -o $@
+
 $(BUILD)/%.bin: user/%.S
 	@mkdir -p $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $(BUILD)/$*.user.o
@@ -231,7 +237,7 @@ $(BUILD)/%.bin: user/%.S
 
 # userbin.S pulls those two files in with .incbin, which the pattern rule for
 # assembly cannot know about on its own.
-$(BUILD)/obj/userbin.o: $(BUILD)/hello.bin $(BUILD)/fault.bin $(BUILD)/peek.bin
+$(BUILD)/obj/userbin.o: $(BUILD)/fault.bin $(BUILD)/peek.bin
 
 $(KERNEL): $(OBJS) linker.ld check-fp-isolation
 	@mkdir -p $(dir $@)
@@ -254,13 +260,14 @@ $(LIMINE_TOOL): | $(LIMINE_DIR)
 # Two images, one per firmware, was the alternative. One image is better for the
 # same reason one log is: two of them is two answers to what ME OS is, and the
 # one that gets tested is not necessarily the one that gets booted.
-$(ISO): $(KERNEL) limine.conf $(LIMINE_TOOL) | $(LIMINE_DIR)
+$(ISO): $(KERNEL) limine.conf $(BUILD)/hello.elf $(LIMINE_TOOL) | $(LIMINE_DIR)
 	@command -v $(XORRISO) >/dev/null 2>&1 || { \
 		echo "missing $(XORRISO), needed to build the ISO. Run make check-tools." >&2; exit 1; }
 	@test -f $(LIMINE_DIR)/BOOTX64.EFI || { \
 		echo "$(LIMINE_DIR) is present but incomplete. Run make distclean, then make." >&2; exit 1; }
-	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/EFI/BOOT
+	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/bin $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL) $(ISO_ROOT)/boot/kernel.elf
+	cp $(BUILD)/hello.elf $(ISO_ROOT)/boot/bin/hello
 	cp limine.conf $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
@@ -416,12 +423,12 @@ $(BUILD)/shell_test: tests/shell_test.c kernel/src/shell.c kernel/src/surface.c 
 # and no emulator: what is worth checking here is the scroll that drops a line,
 # the backspace that must not eat the prompt, and the sizes a person reads.
 $(BUILD)/term_test: tests/term_test.c kernel/src/term.c kernel/src/termback.c \
-                    $(CMD_SRCS) $(VFS_SRCS) kernel/src/surface.c \
+                    $(CMD_SRCS) $(VFS_SRCS) kernel/src/elf.c kernel/src/surface.c \
                     kernel/src/font.c kernel/src/region.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/term_test.c kernel/src/term.c \
 		kernel/src/termback.c \
-		$(CMD_SRCS) $(VFS_SRCS) \
+		$(CMD_SRCS) $(VFS_SRCS) kernel/src/elf.c \
 		kernel/src/surface.c kernel/src/font.c kernel/src/region.c -o $@
 
 # The editor on its own: insert in the middle, split a line, join two, and the
@@ -447,6 +454,10 @@ $(BUILD)/vfs_test: tests/vfs_test.c $(VFS_SRCS) $(HEADERS)
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
+$(BUILD)/elf_test: tests/elf_test.c kernel/src/elf.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/elf_test.c kernel/src/elf.c -o $@
+
 $(BUILD)/uaccess_test: tests/uaccess_test.c kernel/src/uaccess.c kernel/src/vmm.c \
                       kernel/src/vmmfree.c kernel/src/paging.c kernel/src/pmm.c \
                       kernel/src/mem.c $(HEADERS)
@@ -551,7 +562,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
            $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test \
            $(BUILD)/pmm_test $(BUILD)/vmm_test $(BUILD)/desc_test \
-           $(BUILD)/uaccess_test
+           $(BUILD)/uaccess_test $(BUILD)/elf_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -576,6 +587,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/vmm_test
 	$(BUILD)/desc_test
 	$(BUILD)/uaccess_test
+	$(BUILD)/elf_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

@@ -144,7 +144,30 @@ struct process *process_create(const char *name, struct cmd_out *out)
 bool process_add_page(struct process *proc, uint64_t virt, uint64_t flags,
                       const void *contents, uint64_t bytes)
 {
-    if (proc == NULL || proc->page_count >= PROC_MAX_PAGES || bytes > PAGE_SIZE) {
+    return process_add_page_at(proc, virt, flags, contents, bytes, 0);
+}
+
+bool process_add_page_at(struct process *proc, uint64_t virt, uint64_t flags,
+                         const void *contents, uint64_t bytes, uint64_t into)
+{
+    if (proc == NULL || into > PAGE_SIZE || bytes > PAGE_SIZE - into) {
+        return false;
+    }
+
+    /* Already there, which happens when two segments of an executable share
+     * the page at their ends. Filling the existing one is right: allocating a
+     * second would leave whichever mapped last holding a page missing the
+     * other's bytes. */
+    uint64_t existing = 0;
+    if (vmm_translate(&proc->space, virt, &existing, NULL) == VMM_OK) {
+        if (contents != NULL && bytes > 0) {
+            uint8_t *page = (uint8_t *)phys_to_virt(existing & ~0xFFFull);
+            memcpy(page + into, contents, (size_t)bytes);
+        }
+        return true;
+    }
+
+    if (proc->page_count >= PROC_MAX_PAGES) {
         return false;
     }
     uint64_t phys = PMM_NONE;
@@ -155,7 +178,7 @@ bool process_add_page(struct process *proc, uint64_t virt, uint64_t flags,
     /* Zeroed above, so the part of the page the program did not supply reads
      * as zero rather than as whatever the last owner left there. */
     if (contents != NULL && bytes > 0) {
-        memcpy(page, contents, (size_t)bytes);
+        memcpy(page + into, contents, (size_t)bytes);
     }
 
     if (vmm_map(&proc->space, virt, phys, flags | PTE_USER) != VMM_OK) {

@@ -49,6 +49,7 @@ Nothing here has been booted on a physical machine yet.
 | M30 | Address spaces | Page table trees the kernel builds itself, so two of them can mean different memory by the same address, and the processor runs on one | Verified software milestone |
 | M31 | Descriptor tables and traps | The kernel's own segment table with user segments and a trap stack, and 256 interrupt vectors, proved by taking a fault and returning from it | Verified software milestone |
 | M32 | User mode, processes and system calls | A program runs at privilege three in its own address space, writes through a system call, and exits, and a broken one is stopped without taking the machine | Verified software milestone |
+| M33 | ELF executables | A program that is a file on the disk, not part of the kernel, is read, checked, mapped and run by typing RUN | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1251,6 +1252,86 @@ time, no fork, no exec, no wait, no signals, no file descriptors, no shared
 memory, no threads. The program is embedded in the kernel image, which M33 is
 specifically about ending.
 
+## M33 ELF executables, so a program stops being part of the operating system
+
+Done. `/BIN/HELLO` is a 456 byte executable. The bootloader carries it on the
+disc as its own file, the kernel copies it into the filesystem, and `RUN
+/BIN/HELLO` reads it back, checks it, maps its segments into a new address
+space and runs it at privilege three.
+
+**This is the line the whole chain from M29 was walking towards.** Up to M32 a
+program could run, and it was still a blob inside the kernel image, which meant
+ME OS could run things built into itself. Now it can load, isolate and execute a
+program that arrived separately. Everything on the road to running existing
+software needs that and nothing else does.
+
+**ELF support is not Linux compatibility, and the difference matters.** A Linux
+program in an ELF file expects Linux's system call numbers, Linux's memory
+layout and a C library underneath it. What this brings is the container format,
+which is the first of four things. Reading one is worth doing on its own,
+because it is what lets a file another toolchain produced be run at all.
+
+**A name is a claim and the first four bytes are evidence.** `RUN` has read
+files since M27 and everything it could do with one was interpret its lines as
+commands. Which kind of file it is now decided by looking at it, which is what
+every Unix does. A host test writes a file called HELLO holding text and checks
+it is still run as a script, and a file with no suggestive name holding the ELF
+magic and checks it is started as a program.
+
+**Every field is a number a stranger wrote.** The reader is its own file and
+touches nothing, so all of it runs on the development machine against files
+built to be wrong in exactly one way each. Forty-nine checks: a 32 bit file, a
+big endian one, one for another processor, a shared object that would need a
+dynamic linker, a header table that starts near the end, one whose offset
+wraps, more entries than could fit, an entry size that is not ELF64's, a
+segment claiming bytes past the end, an offset and length that wrap round
+together, a segment holding more than it makes room for, one asking for the
+kernel's own address, two wanting the same memory, an entry point outside
+everything loaded, and an entry point in a segment that will not be executable.
+
+More memory than file is deliberately allowed, because that is how a program
+asks for zeroed space, and the pages are zeroed before anything is copied into
+them so it gets what it asked for.
+
+**A segment is not a page.** It has a byte address and a byte length and
+neither is necessarily aligned, and two segments may share the page at their
+ends. So the loader works out the pages first and then fills them, which is
+also the only way the bytes before a segment's start in its first page come out
+zero rather than as whatever the last owner left. A page that is already mapped
+is filled rather than refused, because the file's own rule is that segments do
+not overlap by byte, not that they do not share a page.
+
+**A segment is mapped with the permissions it asked for.** Writable if the
+file says so, and not executable unless the file says so, where the processor
+can enforce it. Data a program can write and also run is how a mistake in one
+becomes control of the other.
+
+**The working program is no longer inside the kernel.** It used to be, at M32,
+and keeping a copy there would have undercut exactly the claim this milestone
+makes, so it was removed. What remains embedded are the two broken programs,
+one that reads a null pointer and one that reads the kernel, and they stay
+because they are fixtures rather than programs and nobody would put either on a
+disk.
+
+**The filesystem needed a binary write.** `vfs_write` takes a string and finds
+its length at the first zero byte, which is right for text and wrong for an
+executable. Reading was already safe, because `vfs_read` copies the length the
+node records and never looks for a terminator.
+
+**How it is proved.** Three ways. The reader is tested exhaustively on the
+development machine. At boot the kernel reads `/BIN/HELLO` back out of the
+filesystem, loads it and checks it said the right twenty-one bytes. And the
+boot test types `RUN /BIN/HELLO` at the shell like a person would, so the
+visible path and the automatic one are both covered. The boot check requires
+the installed file to be at least the size of an ELF header, so a truncated or
+empty file cannot pass by being unreadable in a way that looks like success.
+
+**What it does not do.** No dynamic linking, no shared libraries, no
+relocation, no interpreter, no arguments, no environment, and no more than one
+program at a time. `PS` exists and says so honestly: with no scheduler a
+program only exists while the shell is inside it, and the shell cannot be
+running `PS` at the same moment.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1262,7 +1343,7 @@ specifically about ending.
 
 ## Verification status
 
-M1 to M32 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M33 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 
@@ -1280,7 +1361,7 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow. Twenty-four host programs run in all now, one per part, and the newest
+  overflow. Twenty-five host programs run in all now, one per part, and the newest
   of them writes a filesystem to a disk made of memory and then breaks one
   field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the
