@@ -50,6 +50,8 @@
 #include "pmmboot.h"
 #include "vmmboot.h"
 #include "pointer.h"
+#include "procboot.h"
+#include "process.h"
 #include "rect.h"
 #include "region.h"
 #include "surface.h"
@@ -1868,6 +1870,12 @@ void kmain(void)
     gdt_init();
     trap_init();
     trap_selfcheck();
+
+    /* Programs. Needs everything above it: pages to be made of, an address
+     * space to be isolated in, user segments to run at, and a trap table so
+     * that being wrong is survivable. */
+    process_init();
+    procboot_selfcheck();
 
     log_str("me-os: framebuffer ");
     log_dec(fb_width());

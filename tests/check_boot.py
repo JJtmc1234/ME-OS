@@ -1057,6 +1057,11 @@ def check_log() -> list[str]:
         "gdt: code selector now 0x8",
         "trap: vectors 256",
         "trap: selfcheck passed",
+        # M32. A program ran at privilege three, a broken one was stopped
+        # without taking the machine, and a third was refused the kernel.
+        "trap: system call gate 0x80",
+        "process: user traps are handled",
+        "HELLO FROM USERSPACE",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1177,6 +1182,47 @@ def check_traps() -> list[str]:
     return ["M31 traps: the kernel's own segment table is loaded, all 256 interrupt "
             "vectors have handlers, and a deliberate breakpoint was taken and "
             "returned from with the machine still running"]
+
+
+# M32. User mode, as three claims about what a program can and cannot do.
+#
+# The first is pleasant and the other two are the milestone. Correct code
+# running at privilege three proves the entry works. Incorrect code stopping
+# there, with the machine still running, is what makes privilege separation
+# something other than decoration. And a program being refused the kernel at an
+# address it holds correctly is the isolation itself, because the kernel really
+# is mapped in that program's address space and has to be.
+def check_userspace() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    if "process: selfcheck passed, a program ran at privilege three" not in text:
+        raise CheckFailed("no program ran in user mode")
+    if "HELLO FROM USERSPACE" not in text:
+        raise CheckFailed("the program ran but its output never crossed the system "
+                          "call boundary")
+
+    if "a faulting program was stopped and the machine carried on" not in text:
+        raise CheckFailed("a program that faults did not stop cleanly, so a broken "
+                          "program still costs the whole machine")
+
+    if "a program was refused the kernel's own memory" not in text:
+        raise CheckFailed("a program was not refused the kernel's memory, so user "
+                          "isolation is not actually in force")
+
+    refused_at = re.search(r"process:   refused at 0x([0-9A-F]+)", text)
+    if refused_at is None or int(refused_at.group(1), 16) < 0xFFFFFFFF80000000:
+        raise CheckFailed("the refusal was not at a kernel address, so it does not "
+                          "prove what it claims to")
+
+    calls = re.search(r"process: system calls served (\d+)", text)
+    if calls is None or int(calls.group(1)) < 2:
+        raise CheckFailed("fewer than two system calls were served, so write and "
+                          "exit were not both exercised")
+
+    return ["M32 user mode: a program ran at privilege three and its output crossed "
+            "the system call boundary, a second faulted and was stopped with the "
+            f"machine still running, and a third was refused the kernel's memory at "
+            f"0x{refused_at.group(1)}, an address it held correctly"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1592,6 +1638,7 @@ def main() -> int:
         notes += check_pmm()
         notes += check_vmm()
         notes += check_traps()
+        notes += check_userspace()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()

@@ -216,6 +216,23 @@ check-fp-isolation: $(OBJS)
 		|| { echo "geometry.o has no floating point in it at all" >&2; exit 1; }
 	@echo "floating point is confined to geometry.o"
 
+
+# The M32 test programs. Built separately from the kernel, linked against
+# nothing, and flat rather than ELF because at M32 there is no loader yet. They
+# are placed at USER_CODE_AT from kernel/include/process.h, and if those two
+# ever disagree the program is entered at the wrong address.
+USER_LOAD_AT := 0x400000
+
+$(BUILD)/%.bin: user/%.S
+	@mkdir -p $(BUILD)
+	$(CC) $(ASFLAGS) -c $< -o $(BUILD)/$*.user.o
+	$(LD) -nostdlib -static -Ttext=$(USER_LOAD_AT) --oformat binary \
+		$(BUILD)/$*.user.o -o $@
+
+# userbin.S pulls those two files in with .incbin, which the pattern rule for
+# assembly cannot know about on its own.
+$(BUILD)/obj/userbin.o: $(BUILD)/hello.bin $(BUILD)/fault.bin $(BUILD)/peek.bin
+
 $(KERNEL): $(OBJS) linker.ld check-fp-isolation
 	@mkdir -p $(dir $@)
 	$(LD) $(OBJS) $(LDFLAGS) -o $@
@@ -430,6 +447,13 @@ $(BUILD)/vfs_test: tests/vfs_test.c $(VFS_SRCS) $(HEADERS)
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
+$(BUILD)/uaccess_test: tests/uaccess_test.c kernel/src/uaccess.c kernel/src/vmm.c \
+                      kernel/src/vmmfree.c kernel/src/paging.c kernel/src/pmm.c \
+                      kernel/src/mem.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/uaccess_test.c kernel/src/uaccess.c kernel/src/vmm.c \
+		kernel/src/vmmfree.c kernel/src/paging.c kernel/src/pmm.c kernel/src/mem.c -o $@
+
 $(BUILD)/desc_test: tests/desc_test.c kernel/src/desc.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/desc_test.c kernel/src/desc.c -o $@
@@ -526,7 +550,8 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/shell_test $(BUILD)/desktop_test \
            $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
            $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test \
-           $(BUILD)/pmm_test $(BUILD)/vmm_test $(BUILD)/desc_test
+           $(BUILD)/pmm_test $(BUILD)/vmm_test $(BUILD)/desc_test \
+           $(BUILD)/uaccess_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -550,6 +575,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/pmm_test
 	$(BUILD)/vmm_test
 	$(BUILD)/desc_test
+	$(BUILD)/uaccess_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

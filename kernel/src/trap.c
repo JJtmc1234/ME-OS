@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include "desc.h"
+#include "syscall.h"
 #include "log.h"
 
 #define IDT_VECTORS 256
@@ -76,6 +77,14 @@ void trap_init(void)
                   GATE_INTERRUPT, 0);
     }
 
+    /* The one gate a program is allowed to enter, and the only one whose
+     * privilege is three. Every other vector raised from user mode is a
+     * general protection fault instead of a way into the kernel, which is what
+     * stops a program calling a fault handler directly. */
+    desc_gate(&idt[SYSCALL_VECTOR][0], &idt[SYSCALL_VECTOR][1],
+              (uint64_t)(uintptr_t)isr_stub_table[SYSCALL_VECTOR],
+              SEL_KERNEL_CODE, GATE_INTERRUPT_USER, 0);
+
     struct table_pointer pointer = {
         .limit = (uint16_t)(sizeof idt - 1),
         .base = (uint64_t)(uintptr_t)idt,
@@ -85,6 +94,7 @@ void trap_init(void)
     ready = true;
     log_named_hex("trap: interrupt table at", pointer.base);
     log_named_dec("trap: vectors", IDT_VECTORS);
+    log_named_hex("trap: system call gate", SYSCALL_VECTOR);
 }
 
 /* Where every stub ends up. Called from trapentry.S with the frame it built. */

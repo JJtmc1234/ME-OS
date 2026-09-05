@@ -48,6 +48,7 @@ Nothing here has been booted on a physical machine yet.
 | M29 | A page allocator | Physical memory is discovered from the boot map and handed out one page at a time, and no page is ever handed out twice | Verified software milestone |
 | M30 | Address spaces | Page table trees the kernel builds itself, so two of them can mean different memory by the same address, and the processor runs on one | Verified software milestone |
 | M31 | Descriptor tables and traps | The kernel's own segment table with user segments and a trap stack, and 256 interrupt vectors, proved by taking a fault and returning from it | Verified software milestone |
+| M32 | User mode, processes and system calls | A program runs at privilege three in its own address space, writes through a system call, and exits, and a broken one is stopped without taking the machine | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1161,6 +1162,95 @@ fault. A fault in the kernel logs everything it knows, including the faulting
 address and the decoded page fault reason, and stops. Stopping leaves the log
 and the screen exactly as they were, which is worth more than a reset.
 
+## M32 user mode, so the kernel can run code it does not trust
+
+Done. A program runs at privilege three, in an address space of its own, and
+reaches the kernel only through one gate. A program that faults is stopped and
+the machine carries on. A program that holds a correct kernel address is
+refused anyway.
+
+**Three claims, and the first is the least interesting.** That correct code
+runs at privilege three proves the entry path works. That incorrect code stops
+there is what makes privilege separation something other than decoration. And
+that a program cannot read the kernel is the whole reason the previous three
+milestones exist.
+
+The third is worth being precise about. The kernel is mapped in every program's
+address space, and has to be: a system call has to land somewhere and the
+handler has to exist at the moment the processor arrives. So the pages really
+are there, and the test program really does hold a correct address for one. It
+is refused because that page has no user bit, and at privilege three that is
+the entire difference. The boot check requires the refusal to be at an address
+above the kernel's base, because a refusal anywhere else would not prove what
+it claims.
+
+**There is no instruction that lowers privilege.** `iretq` is used instead,
+because returning from an interrupt restores whatever privilege the saved code
+segment names, and nothing checks the processor was ever there. So a frame is
+built by hand describing a place the machine has never been, and returned to.
+
+**Coming back is a coroutine switch.** `proc_enter_user` saves the kernel's
+callee-saved registers, remembers where its stack was, and drops. `exit`
+restores that stack pointer and returns, which returns from `proc_enter_user`
+even though nothing ever returned through it. The kernel side of a program is a
+function call that has not finished yet.
+
+**Every register is cleared before the drop.** Whatever is left in one is
+visible to the program, and at that moment they hold kernel addresses. A
+program cannot read the kernel, and being told where it is is still a gift to
+anybody trying.
+
+**`int $0x80` rather than the `syscall` instruction.** `syscall` is faster and
+is what Linux uses, and it does not switch stacks: it leaves the program's own
+stack pointer in place and expects the kernel to find a safe one from a
+register the program could also have written. A software interrupt switches to
+the stack in the task state segment before running one instruction of kernel
+code. The fast path is worth having, and not before the slow one is known to be
+correct.
+
+**Every number from a program is hostile until checked.** The kernel runs with
+the program's page tables loaded but at privilege zero, where the user bit
+stops protecting anything: every mapping in that address space is readable and
+writable to it, including the kernel half the program itself cannot touch. So a
+handler that followed a user pointer would let any program read or write any
+part of the kernel by passing the right number. Every byte crossing the
+boundary goes through `uaccess.c`, which checks every page of a range is
+present and carries the user bit before touching any of it, refuses a length
+that wraps past the top of memory, and copies nothing at all when any part
+fails. Forty-nine host checks cover it, including a page mapped in the
+program's own space without the user bit, which is what every kernel page looks
+like from there.
+
+**The output sink is the shell's own.** A program writes to a `struct cmd_out`,
+which is what M25 gave every built in command. So `RUN HELLO > FILE.TXT` and
+piping a program's output into another command work through exactly the
+machinery that already existed, and none of it had to be taught what a program
+is.
+
+**Six calls would have been too many.** There are three: exit, write and
+getpid. A call for the time was written and removed before it shipped, because
+the only clock this kernel has reports how long since anybody last asked, which
+means asking consumes the answer. The desktop asks once a frame to move things
+at a rate. A program that could also ask would take ticks the desktop never
+sees, and the visible symptom would be the rectangle slowing down while a
+program ran. That call needs a counter that accumulates, which needs a timer
+interrupt, which is a later milestone.
+
+**The numbers are ME OS's own, not Linux's.** A Linux compatible boundary is a
+real goal and it belongs in a translation layer above this one, so that Linux
+specific decisions live in a single file. Pretending to be Linux now, badly, in
+a handful of scattered places, is the version of that which cannot be undone.
+
+**A program runs with interrupts off, so nothing can preempt one.** Nothing has
+enabled interrupts yet, so this costs nothing today, and it is an honest limit:
+a program that loops forever currently hangs the machine. Preemption needs a
+timer interrupt.
+
+**What it does not do.** No scheduler, no more than one process running at a
+time, no fork, no exec, no wait, no signals, no file descriptors, no shared
+memory, no threads. The program is embedded in the kernel image, which M33 is
+specifically about ending.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1172,7 +1262,7 @@ and the screen exactly as they were, which is worth more than a reset.
 
 ## Verification status
 
-M1 to M31 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M32 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 
@@ -1190,7 +1280,7 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow. Twenty-three host programs run in all now, one per part, and the newest
+  overflow. Twenty-four host programs run in all now, one per part, and the newest
   of them writes a filesystem to a disk made of memory and then breaks one
   field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the
