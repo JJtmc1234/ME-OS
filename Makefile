@@ -88,6 +88,16 @@ LDFLAGS := -nostdlib -static -z max-page-size=0x1000 --gc-sections \
 SRCS := $(sort $(wildcard kernel/src/*.c))
 OBJS := $(patsubst kernel/src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 
+# Assembly, added at M31. Everything up to M30 was C with a few lines of inline
+# assembly, which is enough right up until something has to be written that has
+# no C form at all. An interrupt stub is entered with the processor's own frame
+# on the stack and must leave with the registers exactly as it found them, and
+# a compiler that is free to use a register for its own purposes cannot promise
+# that. Capital .S rather than .s so the preprocessor runs first and the stubs
+# can be written once as a macro.
+ASMS  := $(sort $(wildcard kernel/src/*.S))
+OBJS  += $(patsubst kernel/src/%.S,$(BUILD)/obj/%.o,$(ASMS))
+
 # Editing a header has to rebuild what includes it. Without this the build
 # succeeded, linked objects compiled against the old header, and reran test
 # binaries that were never recompiled, all reporting a clean pass. Two objects
@@ -179,6 +189,17 @@ $(BUILD)/obj/%.o: kernel/src/%.c
 	@command -v $(CC) >/dev/null 2>&1 || { \
 		echo "missing compiler: $(CC). Run make check-tools." >&2; exit 1; }
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Assembly needs the include path, the dependency generation and the same file
+# prefix mapping the C does, so that a .S including a header rebuilds with it
+# and the build directory stays out of the binary. It does not need any of the
+# code generation flags, because none of this is generated code.
+ASFLAGS := -ffreestanding -nostdinc -g -m64 -mno-red-zone \
+           -ffile-prefix-map=$(CURDIR)=. -Ikernel/include -MMD -MP
+
+$(BUILD)/obj/%.o: kernel/src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c $< -o $@
 
 # Floating point must stay where it was put. If the compiler starts emitting
 # SSE anywhere else, it would run before the processor has been told to allow
@@ -409,6 +430,10 @@ $(BUILD)/vfs_test: tests/vfs_test.c $(VFS_SRCS) $(HEADERS)
 # CPUID unpacking, checked against registers whose answer is written down in
 # the manual. The instruction itself is not run here: a host is not necessarily
 # the machine the kernel boots on.
+$(BUILD)/desc_test: tests/desc_test.c kernel/src/desc.c $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(HOST_TEST_FLAGS) tests/desc_test.c kernel/src/desc.c -o $@
+
 $(BUILD)/vmm_test: tests/vmm_test.c kernel/src/vmm.c kernel/src/vmmfree.c \
                   kernel/src/paging.c kernel/src/pmm.c kernel/src/mem.c $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -501,7 +526,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/shell_test $(BUILD)/desktop_test \
            $(BUILD)/term_test $(BUILD)/cpu_test $(BUILD)/vfs_test \
            $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test \
-           $(BUILD)/pmm_test $(BUILD)/vmm_test
+           $(BUILD)/pmm_test $(BUILD)/vmm_test $(BUILD)/desc_test
 	$(BUILD)/fb_bounds_test
 	$(BUILD)/pointer_test
 	$(BUILD)/timer_rect_test
@@ -524,6 +549,7 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
 	$(BUILD)/cpu_test
 	$(BUILD)/pmm_test
 	$(BUILD)/vmm_test
+	$(BUILD)/desc_test
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)

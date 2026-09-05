@@ -47,6 +47,7 @@ Nothing here has been booted on a physical machine yet.
 | M28 | Finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone |
 | M29 | A page allocator | Physical memory is discovered from the boot map and handed out one page at a time, and no page is ever handed out twice | Verified software milestone |
 | M30 | Address spaces | Page table trees the kernel builds itself, so two of them can mean different memory by the same address, and the processor runs on one | Verified software milestone |
+| M31 | Descriptor tables and traps | The kernel's own segment table with user segments and a trap stack, and 256 interrupt vectors, proved by taking a fault and returning from it | Verified software milestone |
 
 M12 was added after M11 rather than inserted before M9, because M9, M10 and M11
 were already written down and renumbering milestones that people have read is
@@ -1075,6 +1076,91 @@ large page creation, no address space layout randomisation, and no reclaiming
 of an intermediate table that has become empty. Each of those is a real thing
 to want and none of them is needed to run a program.
 
+## M31 descriptor tables and traps, so being wrong stops a program instead of the machine
+
+Done. The kernel builds and loads its own segment table, has a task state
+segment naming a stack to take faults on, fills all 256 interrupt vectors, and
+has taken a deliberate fault and carried on.
+
+**Why this has to come before user mode.** A program is supposed to be able to
+be wrong. Dividing by zero, reading an address it does not own, or executing
+rubbish should stop that program and leave the machine running. Up to M30 there
+was no interrupt table at all, which was honest while the only code on the
+machine was the kernel's own, because a kernel fault is a bug either way. With
+no table the processor cannot find a handler, then cannot report that it cannot
+find one, and resets. That is the difference between a broken program and a
+silent reboot, and it is the whole milestone.
+
+**Why the bootloader's segment table is not enough.** It is a perfectly good
+table and it is replaced anyway, for two things it does not contain. There are
+no user segments, and user mode is not a state the kernel asks for: it is what
+the processor is in because the code segment selector it is running with says
+privilege three. And there is no task state segment, which is what tells the
+processor which stack to switch to when a trap arrives from user mode. Without
+it the processor would push the trap frame onto the program's own stack, which
+is memory the program controls, and the first thing a handler read would be
+whatever the program chose to put there.
+
+**Segmentation is nearly gone and the remnant is exactly what is needed.** In
+64 bit mode base and limit are ignored. What a code descriptor still decides is
+the privilege level, which is the one thing this milestone is about. User data
+is placed before user code in the table even though nothing today depends on
+the order, because `sysret` derives both selectors from one register and
+requires that arrangement, and putting them the other way round would have to
+be undone later.
+
+**Reloading the code segment needs a far return.** There is no instruction that
+assigns to CS. The only way to change it is a jump carrying a selector, and the
+only one left in 64 bit mode is `lretq`, so the selector and a return address
+are pushed by hand and a far return is used as a jump to the next line. Until
+that happens the new table is loaded and ignored, and the processor is still
+running on the bootloader's descriptor. That looks identical from C, which is
+why the kernel reads the selector back afterwards and the boot test requires it
+to be the kernel code segment of the table this kernel built.
+
+**One stack shape for every vector.** The processor pushes an error code for
+some exceptions and not for others, which would make the stack a different
+shape depending on what happened. The stubs that do not get one push a zero in
+its place, so everything below that point sees one layout. The stubs are
+assembly because there is no way to write them in C: a handler is entered with
+the processor's frame already on the stack and must leave with every register
+as it found it, and a compiler is free to use any register on the way. This is
+the first assembly in the project, and the build learned about `.S` files for
+it.
+
+**The trap stack is its own array.** Not the boot stack, because the boot stack
+is where the faulting code was running, and a fault caused by exhausting that
+stack would fault again while pushing the frame, which is a double fault, and
+then a triple fault.
+
+**External interrupts stay masked.** Nothing here enables them. The timer, the
+keyboard and the mouse are all still polled, so there is nothing to enable them
+for, and a masked machine is one fewer thing happening while the rest of this
+is being built. Exceptions are not interrupts and arrive regardless, which is
+what makes an interrupt table useful before any interrupt is turned on.
+
+**How it is proved.** The bit layouts are their own file and their own test.
+A handler address in an interrupt gate is stored in three separate pieces and a
+task state segment base in four, and getting one piece wrong does not produce a
+wrong answer anybody notices. It produces a jump to an address nobody chose, at
+the exact moment something has already gone wrong enough to fault. Forty host
+checks write every field and read it back, including addresses that land on and
+just past each piece boundary, and check that only the system call gate is
+reachable from user mode.
+
+On the real machine the kernel executes `int3` and checks it came back with the
+trap counted and the right vector recorded. If the table were wrong that line
+would simply never appear, and its absence is the report. The boot test
+requires it, requires the code selector to be the kernel's own, and requires
+all 256 vectors to be filled, because an unexpected vector with no handler is
+the reset this milestone exists to prevent.
+
+**What it does not do.** No external interrupts, no programmable interrupt
+controller, no timer interrupt, no preemption, and no recovery from a kernel
+fault. A fault in the kernel logs everything it knows, including the faulting
+address and the decoded page fault reason, and stops. Stopping leaves the log
+and the screen exactly as they were, which is worth more than a reset.
+
 ## How a milestone is judged done
 
 1. It runs. Compiling is not passing.
@@ -1086,7 +1172,7 @@ to want and none of them is needed to run a program.
 
 ## Verification status
 
-M1 to M30 are verified in QEMU by automated framebuffer inspection and by the
+M1 to M31 are verified in QEMU by automated framebuffer inspection and by the
 kernel's own log. None has been observed on physical ME hardware, and physical
 machine boot testing is a later step that has not been scheduled.
 
@@ -1104,7 +1190,7 @@ Two kinds of test run:
   capacity, z-order, hit testing, focus and input routing. A ninth covers local
   surfaces, clipping, cursor overlay, composition, overlap and presentation
   guards. A tenth covers event order, circular queue behavior and explicit
-  overflow. Twenty-two host programs run in all now, one per part, and the newest
+  overflow. Twenty-three host programs run in all now, one per part, and the newest
   of them writes a filesystem to a disk made of memory and then breaks one
   field of it at a time to check that every impossible arrangement is refused.
 - `make test` boots the real image headlessly, injects a key press, moves the

@@ -48,15 +48,16 @@ a later step, and nothing in this repository writes to a disk or a USB device.
 | M28 finishing a name | Tab completes a filename, and offers nothing rather than the wrong thing | Verified software milestone, QEMU |
 | M29 a page allocator | Physical memory discovered from the boot map, handed out a page at a time | Verified software milestone, QEMU |
 | M30 address spaces | Page tables the kernel builds itself, and the processor runs on one | Verified software milestone, QEMU |
+| M31 descriptor tables and traps | User segments, a trap stack, and a fault that is handled instead of resetting | Verified software milestone, QEMU |
 
-All thirty finished milestones are checked automatically. `make test` boots
+All thirty one finished milestones are checked automatically. `make test` boots
 the image headlessly, types at it, moves the mouse, opens and closes windows,
 and inspects the resulting framebuffers and the kernel's own log. `make test-unit`
-runs twenty two programs on the development machine with no emulator, covering
+runs twenty three programs on the development machine with no emulator, covering
 framebuffer clipping, dirty region arithmetic, mouse packet decoding, pointer
 clamping, the tiling layout, the desktop, the terminal and its commands, the
 processor identification, the filesystem on disk, the text editor, the clock, the page
-allocator and the address spaces. See
+allocator, the address spaces and the descriptor tables. See
 [docs/milestones.md](docs/milestones.md) for the full roadmap.
 
 ## Running it

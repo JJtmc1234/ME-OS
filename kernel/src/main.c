@@ -40,6 +40,7 @@
 #include "cursor.h"
 #include "fb.h"
 #include "fpu.h"
+#include "gdt.h"
 #include "geometry.h"
 #include "font.h"
 #include "kbd.h"
@@ -55,6 +56,7 @@
 #include "term.h"
 #include "termback.h"
 #include "timer.h"
+#include "trap.h"
 #include "vars.h"
 #include "window.h"
 
@@ -1856,6 +1858,16 @@ void kmain(void)
      * fatal: without them the kernel is exactly what it was at M28. */
     vmmboot_init();
     vmmboot_selfcheck();
+
+    /* The segment table and the interrupt table, in that order. A gate names a
+     * code selector, so the table it lives in has to exist first.
+     *
+     * External interrupts stay masked. Nothing needs them yet: the timer, the
+     * keyboard and the mouse are all polled. Exceptions are not interrupts and
+     * arrive regardless, which is the whole point of installing this. */
+    gdt_init();
+    trap_init();
+    trap_selfcheck();
 
     log_str("me-os: framebuffer ");
     log_dec(fb_width());

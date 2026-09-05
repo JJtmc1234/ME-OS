@@ -1052,6 +1052,11 @@ def check_log() -> list[str]:
         # M30. A second address space was built and the processor ran on it.
         "vmm: no-execute available",
         "vmm: selfcheck passed",
+        # M31. The kernel's own segment table is loaded, and a fault was taken
+        # and returned from rather than resetting the machine.
+        "gdt: code selector now 0x8",
+        "trap: vectors 256",
+        "trap: selfcheck passed",
     )
     for path, name in ((DEBUG_LOG, "debug port"), (SERIAL_LOG, "serial port")):
         if not path.exists() or path.stat().st_size == 0:
@@ -1140,6 +1145,38 @@ def check_vmm() -> list[str]:
     return [f"M30 address spaces: a second one built, loaded into CR3, read back "
             f"through a mapping only it has, and torn down returning "
             f"{tables.group(1)} page tables"]
+
+
+# M31. Descriptor tables, and a fault that did not end the machine.
+#
+# The thing being proved is narrow and is the whole milestone: the processor
+# found a handler, ran it, and came back. Without an interrupt table it cannot
+# find one, cannot report that it cannot find one, and resets. That is the
+# difference between a program being wrong and a reboot.
+def check_traps() -> list[str]:
+    text = SERIAL_LOG.read_text(errors="ignore")
+
+    selector = re.search(r"gdt: code selector now 0x([0-9A-F]+)", text)
+    if selector is None:
+        raise CheckFailed("the kernel never reported its code segment selector")
+    if int(selector.group(1), 16) != 0x8:
+        raise CheckFailed(
+            f"the code selector is 0x{selector.group(1)}, not the kernel code "
+            f"segment of the table this kernel built, so the far return that "
+            f"reloads it did not take effect and the bootloader's table is "
+            f"still in use")
+
+    if "trap: selfcheck passed" not in text:
+        raise CheckFailed("a deliberate fault was not taken and returned from")
+
+    vectors = re.search(r"trap: vectors (\d+)", text)
+    if vectors is None or int(vectors.group(1)) != 256:
+        raise CheckFailed("the interrupt table does not cover all 256 vectors, so an "
+                          "unexpected one would find no handler and reset the machine")
+
+    return ["M31 traps: the kernel's own segment table is loaded, all 256 interrupt "
+            "vectors have handlers, and a deliberate breakpoint was taken and "
+            "returned from with the machine still running"]
 
 
 # M16. How much a single cursor movement is allowed to cost, in pixels written
@@ -1554,6 +1591,7 @@ def main() -> int:
         notes += check_log()
         notes += check_pmm()
         notes += check_vmm()
+        notes += check_traps()
         notes += check_cursor_cost()
         notes += check_tiling()
         notes += check_focus_moved()
