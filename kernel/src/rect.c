@@ -122,7 +122,7 @@ bool rect_contains(const struct moving_rect *rect, int64_t x, int64_t y)
 
     const uint64_t across = (uint64_t)x - (uint64_t)rect->x;
     const uint64_t down = (uint64_t)y - (uint64_t)rect->y;
-    return across <= rect->width && down < rect->height;
+    return across < rect->width && down < rect->height;
 }
 
 void rect_drag_reset(struct rect_drag *drag)
