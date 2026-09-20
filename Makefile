@@ -387,18 +387,18 @@ vbox-remove:
 # binary by -ffile-prefix-map.
 .PHONY: check-reproducible
 check-reproducible:
-	$(MAKE) clean
-	$(MAKE) $(ISO)
-	cp $(ISO) $(BUILD)/first.iso.check
-	mv $(BUILD)/first.iso.check $(BUILD)/../first-iso-check.tmp
-	$(MAKE) clean
-	$(MAKE) $(ISO)
-	@mkdir -p $(BUILD)
-	@mv $(BUILD)/../first-iso-check.tmp $(BUILD)/first.iso.check
-	@cmp $(BUILD)/first.iso.check $(ISO) \
+	@set -eu; \
+	check_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/me-os-repro.XXXXXX"); \
+	trap 'rm -rf "$$check_dir"' EXIT; \
+	trap 'exit 1' HUP INT TERM; \
+	$(MAKE) clean; \
+	$(MAKE) "$(ISO)"; \
+	cp "$(ISO)" "$$check_dir/first.iso"; \
+	$(MAKE) clean; \
+	$(MAKE) "$(ISO)"; \
+	cmp "$$check_dir/first.iso" "$(ISO)" \
 		&& echo "reproducible: two clean builds are byte for byte identical" \
 		|| { echo "NOT reproducible: the two builds differ" >&2; exit 1; }
-	@$(RM) $(BUILD)/first.iso.check
 
 # Framebuffer clipping checked on the host, with guard regions around a fake
 # framebuffer. Catches an out of bounds write without booting anything.
@@ -580,7 +580,7 @@ $(BUILD)/event_test: tests/event_test.c kernel/src/event.c $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(HOST_TEST_FLAGS) tests/event_test.c kernel/src/event.c -o $@
 
-test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
+TEST_BINS := $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_test \
            $(BUILD)/calc_test $(BUILD)/vars_test $(BUILD)/kbd_test \
            $(BUILD)/geometry_test $(BUILD)/window_test $(BUILD)/surface_test \
            $(BUILD)/event_test $(BUILD)/region_test $(BUILD)/tile_test \
@@ -589,31 +589,9 @@ test-unit: $(BUILD)/fb_bounds_test $(BUILD)/pointer_test $(BUILD)/timer_rect_tes
            $(BUILD)/editor_test $(BUILD)/rtc_test $(BUILD)/vfsdisk_test \
            $(BUILD)/pmm_test $(BUILD)/vmm_test $(BUILD)/desc_test \
            $(BUILD)/uaccess_test $(BUILD)/elf_test
-	$(BUILD)/fb_bounds_test
-	$(BUILD)/pointer_test
-	$(BUILD)/timer_rect_test
-	$(BUILD)/calc_test
-	$(BUILD)/vars_test
-	$(BUILD)/kbd_test
-	$(BUILD)/geometry_test
-	$(BUILD)/window_test
-	$(BUILD)/surface_test
-	$(BUILD)/event_test
-	$(BUILD)/region_test
-	$(BUILD)/tile_test
-	$(BUILD)/shell_test
-	$(BUILD)/desktop_test
-	$(BUILD)/vfs_test
-	$(BUILD)/vfsdisk_test
-	$(BUILD)/editor_test
-	$(BUILD)/rtc_test
-	$(BUILD)/term_test
-	$(BUILD)/cpu_test
-	$(BUILD)/pmm_test
-	$(BUILD)/vmm_test
-	$(BUILD)/desc_test
-	$(BUILD)/uaccess_test
-	$(BUILD)/elf_test
+
+test-unit: $(TEST_BINS)
+	@set -e; for test in $^; do "$$test"; done
 
 # Headless boot that captures the screen and checks it, no display needed.
 test: $(ISO) $(OVMF_LOCAL)
